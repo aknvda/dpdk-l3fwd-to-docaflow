@@ -12,3 +12,7 @@ for component in forward options device; do
         -o "$test_build/test-$component"
     "$test_build/test-$component"
 done
+"${CC:-cc}" -std=c11 -D_GNU_SOURCE -Wall -Wextra -Werror \
+    -fsanitize=address,undefined -g -I"$project_root/src" \
+    "$project_root/tests/test_netstate.c" -o "$test_build/test-netstate"
+"$test_build/test-netstate"

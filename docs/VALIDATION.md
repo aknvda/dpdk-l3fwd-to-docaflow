@@ -1,8 +1,9 @@
 # Validation requirements and acceptance gates
 
 Status: the application builds against DOCA 3.3 and has passed software packet
-comparison through 1024 routes. Physical admission, hardware equivalence and
-performance remain open. See RESULTS.md for measured results.
+comparison through 1024 routes. A physical startup attempt failed at the firmware
+capability query; hardware equivalence and performance remain open. See RESULTS.md
+for measured results.
 
 ## Minimum physical lab
 
@@ -11,6 +12,14 @@ Traffic generator port A <----> DUT port 0
 Traffic generator port B <----> DUT port 1
 Management/SSH uses separate interfaces.
 ```
+
+This connectivity is required for hardware packet acceptance. Software development
+and offline packet comparison can continue without it; cable-free startup can
+check device admission and rule insertion. Functional tests can use any common
+supported link speed. A 100GbE link is required only for a 100GbE performance claim.
+Existing isolated switch paths or another reserved wired DUT/generator pair are
+valid alternatives to new direct cables. See the
+[operations request and justification](HARDWARE_TEST_REQUEST.md).
 
 | Item | Requirement / proposed starting point |
 | --- | --- |
@@ -51,7 +60,7 @@ The extended software test adds TTL/checksum boundaries and route-table scaling
 through the pinned upstream limit: `--extended --route-count 1024`. This is
 functional route coverage, not a hardware-capacity or throughput measurement.
 
-## Gate 1: device and SDK admission (implemented checks; physical run pending)
+## Gate 1: device and SDK admission (physical attempt failed; remediation pending)
 
 1. Save the read-only inventory and map PCI addresses, port IDs, physical links,
    PF/VF/SF/representors, NUMA nodes and application CPU affinity.
@@ -69,13 +78,34 @@ DOCA LPM needs a preceding root pipe. Validate pairing/forwarding for both
 directions in the selected mode. See the [DOCA Flow guide](https://networking-docs.nvidia.com/doca/archive/3-5-0/doca-flow).
 
 The implemented application uses host-side VNF/HWS, not switch mode or
-representors. It requires two PCI functions on the same reserved adapter.
+representors. It requires two PCI functions on the same reserved adapter, with
+one kernel network interface per selected function.
 Interfaces on every function of that adapter must be DOWN, unaddressed, free
 of upper/master interfaces and have no active VFs. The application preserves
-the configured MTU and supports MTU <= 1500. It does not install drivers, flash
+the configured MTU, supports MTU <= 1500 and returns opened physical ports to
+administrative DOWN during normal or failed-startup cleanup, including a probe
+failure that releases its DPDK handle. SIGINT/SIGTERM cancellation is checked during
+startup and while waiting for rule completions. An in-progress SDK call must return
+before cleanup can run. SIGKILL or a crash can bypass cleanup; inspect the reserved
+interfaces before another attempt. Interface renaming/replacement during a run is
+unsupported; an identity mismatch fails restoration rather than touching a new device.
+It does not install drivers, flash
 firmware, allocate hugepages, change operating mode or unbind the kernel driver.
 Checks use the current network namespace and sysfs; exclusive ownership and
 other namespaces/processes still require a lab reservation check.
+
+Installing the SDK and successfully probing mlx5 are not enough to admit a DUT.
+Check the release-matched firmware matrix and then actually start a DOCA port.
+For example, the [DPDK 25.11 HWS requirements](https://doc.dpdk.org/guides-25.11/nics/mlx5.html#hardware-steering)
+list firmware `xx.35.1012` as the minimum; the SDK's supported combination may
+require a newer version. Firmware flashing and reset require a separate maintenance
+plan with a matching PSID, verified vendor image, recovery access and a bounded
+device scope. Keep real inventory, image metadata and maintenance commands private.
+
+If startup fails, save stderr and the exit code. A capability-query rejection
+before port creation is different from an unsupported pipe/action combination
+after port creation. Neither may produce a passing hardware result or a `ready`
+event. Confirm both ports return DOWN and management connectivity remains intact.
 
 Use a **separate two-port TRex stateless generator** for repeatable traffic,
 captures and subsequent rate sweeps. TRex's upstream documentation lists mlx5

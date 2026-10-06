@@ -3,6 +3,7 @@
 #include "flow.h"
 #include "device.h"
 #include "options.h"
+#include "netstate.h"
 #include <ctype.h>
 #include <errno.h>
 #include <inttypes.h>
@@ -143,6 +144,15 @@ int main(int argc, char **argv)
 #endif
     if (!separator) { fputs("Separate EAL options from application options with --\n", stderr); return 2; }
     if (hardware && (l3_device_safe(pci[0]) || l3_device_safe(pci[1]))) return 2;
+    struct l3_net_state net_state[2] = {0};
+    if (hardware) {
+        for (unsigned p = 0; p < L3_PORTS; ++p)
+            if (l3_net_snapshot_at(pci[p], "/sys", &net_state[p])) {
+                fputs("Cannot snapshot one isolated kernel interface per PCI function\n", stderr);
+                return 2;
+            }
+    }
+    signal(SIGINT, stop_handler); signal(SIGTERM, stop_handler);
 
     char **eal = calloc((size_t)separator+6, sizeof(char *));
     if (!eal) return 1;
@@ -162,7 +172,8 @@ int main(int argc, char **argv)
     struct l3_flow *flow = NULL;
     struct rte_mempool *pool = NULL;
     bool started[2] = {false, false};
-    if (hardware && l3_devices_open(pci, devices)) goto cleanup;
+    if (stop_requested || (hardware && l3_devices_open(pci, devices))) goto cleanup;
+    if (stop_requested) goto cleanup;
     if (rte_eth_dev_count_avail() != L3_PORTS || !rte_eth_dev_is_valid_port(0) || !rte_eth_dev_is_valid_port(1)) {
         fputs("Exactly two ports with logical IDs 0 and 1 are required\n", stderr); goto cleanup;
     }
@@ -170,11 +181,12 @@ int main(int argc, char **argv)
                                   RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
     if (!pool) { fputs("Cannot allocate mbuf pool\n", stderr); goto cleanup; }
     for (uint16_t p = 0; p < L3_PORTS; ++p) {
+        if (stop_requested) goto cleanup;
         if (configure_port(p, pool, hardware, &macs)) { fputs("Port configuration failed\n", stderr); goto cleanup; }
         started[p] = true;
     }
-    if (hardware && l3_flow_start(&flow, &routes, &macs, devices)) goto cleanup;
-    signal(SIGINT, stop_handler); signal(SIGTERM, stop_handler);
+    if (hardware && l3_flow_start(&flow, &routes, &macs, devices, &stop_requested)) goto cleanup;
+    if (stop_requested) goto cleanup;
     uint64_t received[2] = {0}, transmitted[2] = {0}, dropped = 0, tx_dropped = 0;
     printf("{\"event\":\"ready\",\"backend\":\"%s\",\"routes\":%zu,\"dpdk\":\"%s\"}\n", backend, routes.count, rte_version());
     fflush(stdout);
@@ -219,5 +231,12 @@ cleanup:
     if (pool) rte_mempool_free(pool);
     if (rte_eal_cleanup()) result = 1;
     if (l3_devices_close(devices)) result = 1;
+    if (hardware) {
+        for (unsigned p = 0; p < L3_PORTS; ++p)
+            if (l3_net_restore(&net_state[p])) {
+                fprintf(stderr, "Cannot restore logical port %u to administrative DOWN\n", p);
+                result = 1;
+            }
+    }
     return result;
 }

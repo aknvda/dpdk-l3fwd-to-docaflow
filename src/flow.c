@@ -7,10 +7,12 @@
 #include <string.h>
 #include <time.h>
 #include <doca_flow.h>
+#include <doca_log.h>
 
 struct completion { unsigned submitted, completed; bool failed; };
 struct l3_flow {
     bool initialized;
+    const volatile sig_atomic_t *cancelled;
     uint16_t queue;
     struct doca_flow_port *ports[L3_PORTS];
     struct doca_flow_pipe *exceptions[L3_PORTS];
@@ -45,6 +47,7 @@ static doca_error_t finish_entry(struct l3_flow *flow, unsigned p, doca_error_t 
     ++c->submitted;
     double deadline = seconds() + 2.0;
     while (c->completed < c->submitted && !c->failed) {
+        if (flow->cancelled && *flow->cancelled) return DOCA_ERROR_BAD_STATE;
         if (seconds() >= deadline) return DOCA_ERROR_TIME_OUT;
         doca_error_t err = doca_flow_entries_process(flow->ports[p], 0, 10000, 1);
         if (err != DOCA_SUCCESS) return err;
@@ -52,12 +55,22 @@ static doca_error_t finish_entry(struct l3_flow *flow, unsigned p, doca_error_t 
     return c->failed || c->completed != c->submitted ? DOCA_ERROR_BAD_STATE : DOCA_SUCCESS;
 }
 
-#define TRY(expression) do { err = (expression); if (err != DOCA_SUCCESS) goto out; } while (0)
+#define TRY(expression) do { \
+    err = (flow->cancelled && *flow->cancelled) ? DOCA_ERROR_BAD_STATE : (expression); \
+    if (err != DOCA_SUCCESS) { \
+        fprintf(stderr, "%s: %s failed: %s (%d)\n", __func__, #expression, \
+                doca_error_get_descr(err), (int)err); \
+        goto out; \
+    } \
+} while (0)
 
 static doca_error_t initialize(struct l3_flow *flow)
 {
     struct doca_flow_cfg *cfg = NULL;
+    struct doca_log_backend *sdk_log;
     doca_error_t err;
+    TRY(doca_log_backend_create_with_file_sdk(stderr, &sdk_log));
+    TRY(doca_log_backend_set_sdk_level(sdk_log, DOCA_LOG_LEVEL_WARNING));
     TRY(doca_flow_cfg_create(&cfg));
     TRY(doca_flow_cfg_set_pipe_queues(cfg, 1));
     TRY(doca_flow_cfg_set_mode_args(cfg, "vnf,hws"));
@@ -246,11 +259,13 @@ out:
 }
 
 int l3_flow_start(struct l3_flow **output, const struct l3_routes *routes,
-                  const struct l3_macs *macs, struct doca_dev *devices[L3_PORTS])
+                  const struct l3_macs *macs, struct doca_dev *devices[L3_PORTS],
+                  const volatile sig_atomic_t *cancelled)
 {
     struct l3_flow *flow = calloc(1, sizeof(*flow));
     if (!flow) return -1;
     *output = flow; /* Caller owns cleanup on both success and partial failure. */
+    flow->cancelled = cancelled;
     doca_error_t err;
     TRY(initialize(flow));
     for (unsigned p = 0; p < L3_PORTS; ++p) TRY(start_port(flow, p, devices[p], routes->count));
