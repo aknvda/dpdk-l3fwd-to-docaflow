@@ -53,5 +53,11 @@ int main(void)
     injected = NO_CALLBACK;
     assert(finish_entry(&fixture, 0, DOCA_SUCCESS) == DOCA_ERROR_TIME_OUT);
     assert(fixture.completion[0].completed == 0);
+    volatile sig_atomic_t cancelled = 1;
+    memset(&fixture, 0, sizeof(fixture));
+    fixture.cancelled = &cancelled;
+    calls = 0;
+    assert(finish_entry(&fixture, 0, DOCA_SUCCESS) == DOCA_ERROR_BAD_STATE);
+    assert(calls == 0); /* Cancellation must not wait for an absent completion. */
     puts("DOCA completion fault-injection tests: PASS (no hardware access)");
 }

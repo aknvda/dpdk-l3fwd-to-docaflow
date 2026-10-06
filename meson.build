@@ -13,10 +13,12 @@ test('eal-admission', options_test)
 device_test = executable('test-device', ['tests/test_device.c', 'src/device.c'],
                          include_directories: inc)
 test('device-admission', device_test)
+netstate_test = executable('test-netstate', 'tests/test_netstate.c', include_directories: inc)
+test('kernel-port-restoration', netstate_test)
 
 doca = dependency('doca-flow', version: ['>=3.3', '<3.4'], required: get_option('doca'))
 app_deps = [dependency('libdpdk')]
-app_sources = ['src/main.c', 'src/device.c']
+app_sources = ['src/main.c', 'src/device.c', 'src/netstate.c']
 app_flags = []
 app_link_args = []
 app_rpath = ''
