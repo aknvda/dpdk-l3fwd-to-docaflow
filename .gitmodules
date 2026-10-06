@@ -1,0 +1,3 @@
+[submodule "upstream/dpdk"]
+	path = upstream/dpdk
+	url = https://github.com/DPDK/dpdk.git

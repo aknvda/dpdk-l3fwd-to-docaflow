@@ -1,0 +1,6 @@
+build/
+artifacts/
+__pycache__/
+*.pyc
+.superpowers/
+.DS_Store

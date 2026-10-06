@@ -1,0 +1,11 @@
+FROM ubuntu:24.04
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    build-essential meson ninja-build pkg-config python3 python3-pyelftools \
+    libnuma-dev libpcap-dev ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY upstream/dpdk /opt/dpdk
+RUN meson setup /opt/dpdk/build /opt/dpdk \
+    -Dplatform=generic -Dexamples=l3fwd -Dtests=false \
+    -Denable_drivers=net/pcap -Dmax_numa_nodes=1 && \
+    ninja -C /opt/dpdk/build -j2
+WORKDIR /work
+CMD ["python3", "tests/pcap_smoke.py", "--binary", "/opt/dpdk/build/examples/dpdk-l3fwd", "--output", "artifacts/pcap"]
