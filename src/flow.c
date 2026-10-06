@@ -16,6 +16,7 @@ struct l3_flow {
     uint16_t queue;
     struct doca_flow_port *ports[L3_PORTS];
     struct doca_flow_pipe *exceptions[L3_PORTS];
+    struct doca_flow_pipe *rewrites[L3_PORTS], *lpm[L3_PORTS], *roots[L3_PORTS];
     struct doca_flow_pipe_entry *rewrite[L3_PORTS];
     struct completion completion[L3_PORTS];
 };
@@ -220,10 +221,10 @@ out:
     return err;
 }
 
-static doca_error_t root_pipe(struct l3_flow *flow, unsigned p, struct doca_flow_pipe *lpm)
+static doca_error_t root_pipe(struct l3_flow *flow, unsigned p, struct doca_flow_pipe *lpm,
+                              struct doca_flow_pipe **pipe)
 {
     struct doca_flow_pipe_cfg *cfg = NULL;
-    struct doca_flow_pipe *pipe;
     struct doca_flow_match match = {0}, mask = {0};
     struct doca_flow_fwd fwd = {.type = DOCA_FLOW_FWD_PIPE, .next_pipe = lpm};
     struct doca_flow_fwd miss = exception_fwd(flow, p);
@@ -245,12 +246,12 @@ static doca_error_t root_pipe(struct l3_flow *flow, unsigned p, struct doca_flow
     TRY(doca_flow_pipe_cfg_set_is_root(cfg, true));
     TRY(doca_flow_pipe_cfg_set_nr_entries(cfg, 254));
     TRY(doca_flow_pipe_cfg_set_match(cfg, &match, &mask));
-    TRY(doca_flow_pipe_create(cfg, &fwd, &miss, &pipe));
+    TRY(doca_flow_pipe_create(cfg, &fwd, &miss, pipe));
     for (unsigned ttl = 2; ttl <= 255; ++ttl) {
         struct doca_flow_match entry = {0};
         struct doca_flow_pipe_entry *handle;
         entry.outer.ip4.ttl = ttl;
-        TRY(finish_entry(flow, p, doca_flow_pipe_basic_add_entry(0, pipe, &entry, 0,
+        TRY(finish_entry(flow, p, doca_flow_pipe_basic_add_entry(0, *pipe, &entry, 0,
             NULL, NULL, NULL, DOCA_FLOW_ENTRY_FLAGS_NO_WAIT, &flow->completion[p], &handle)));
     }
 out:
@@ -272,11 +273,10 @@ int l3_flow_start(struct l3_flow **output, const struct l3_routes *routes,
     TRY(doca_flow_port_pair(flow->ports[1], flow->ports[0]));
     TRY(doca_flow_port_pair(flow->ports[0], flow->ports[1]));
     for (unsigned p = 0; p < L3_PORTS; ++p) {
-        struct doca_flow_pipe *rewrite, *lpm;
         TRY(exception_pipe(flow, p));
-        TRY(rewrite_pipe(flow, p, macs, &rewrite));
-        TRY(route_pipe(flow, p, routes, rewrite, &lpm));
-        TRY(root_pipe(flow, p, lpm));
+        TRY(rewrite_pipe(flow, p, macs, &flow->rewrites[p]));
+        TRY(route_pipe(flow, p, routes, flow->rewrites[p], &flow->lpm[p]));
+        TRY(root_pipe(flow, p, flow->lpm[p], &flow->roots[p]));
     }
     return 0;
 out:
@@ -301,6 +301,18 @@ int l3_flow_stop(struct l3_flow *flow)
 {
     if (!flow) return 0;
     int result = 0;
+    /* Release incoming references before their destination pipes. Handles are
+     * retained from creation, including when a later entry submission fails. */
+    for (unsigned p = L3_PORTS; p-- > 0;) {
+        if (flow->roots[p]) doca_flow_pipe_destroy(flow->roots[p]);
+        if (flow->lpm[p]) doca_flow_pipe_destroy(flow->lpm[p]);
+        if (flow->rewrites[p]) doca_flow_pipe_destroy(flow->rewrites[p]);
+        if (flow->exceptions[p]) doca_flow_pipe_destroy(flow->exceptions[p]);
+    }
+    /* Cross-port forwarding retains peer resources. Flush every opened port
+     * before stopping either member, as in the SDK's paired-port teardown. */
+    for (unsigned p = L3_PORTS; p-- > 0;)
+        if (flow->ports[p]) doca_flow_port_pipes_flush(flow->ports[p]);
     for (unsigned p = L3_PORTS; p-- > 0;)
         if (flow->ports[p] && doca_flow_port_stop(flow->ports[p]) != DOCA_SUCCESS) result = -1;
     if (flow->initialized) doca_flow_destroy();

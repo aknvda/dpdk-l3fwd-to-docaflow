@@ -4,9 +4,10 @@ An incremental migration of the official DPDK `l3fwd` application to NVIDIA
 DOCA Flow. Start with two-port IPv4 longest-prefix-match forwarding, preserve
 the software baseline, then validate a hardware forwarding path against it.
 
-**Current stage: IPv4 implementation, SDK build and software packet validation.**
+**Current stage: IPv4 implementation, software parity and hardware rule installation.**
 The application has a DOCA Flow 3.3 backend and a DPDK software backend. Physical
-offload, hardware equivalence and performance remain unverified. See
+DOCA rule installation and teardown pass through 1024 routes. Packet forwarding,
+hardware equivalence and performance remain unverified. See
 [migration behavior](docs/MIGRATION.md), [results](docs/RESULTS.md) and
 [lab requirements](docs/VALIDATION.md) for the exact boundaries.
 
