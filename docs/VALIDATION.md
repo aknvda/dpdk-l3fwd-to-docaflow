@@ -1,7 +1,8 @@
 # Validation requirements and acceptance gates
 
-Status: this is the lab plan. The implemented PCAP test covers a small valid
-IPv4 corpus only. No DOCA hardware result is claimed. See RESULTS.md for runs.
+Status: the application builds against DOCA 3.3 and has passed software packet
+comparison through 1024 routes. Physical admission, hardware equivalence and
+performance remain open. See RESULTS.md for measured results.
 
 ## Minimum physical lab
 
@@ -46,7 +47,11 @@ startup), then stop the application and compare final captures. Reaching the
 expected packet count early is not a reason to stop collecting.
 PCAP virtual ports do not exercise mlx5, DMA, offload, link rates or NIC parsing.
 
-## Gate 1: device and SDK admission (to implement/run)
+The extended software test adds TTL/checksum boundaries and route-table scaling
+through the pinned upstream limit: `--extended --route-count 1024`. This is
+functional route coverage, not a hardware-capacity or throughput measurement.
+
+## Gate 1: device and SDK admission (implemented checks; physical run pending)
 
 1. Save the read-only inventory and map PCI addresses, port IDs, physical links,
    PF/VF/SF/representors, NUMA nodes and application CPU affinity.
@@ -62,6 +67,32 @@ PCAP virtual ports do not exercise mlx5, DMA, offload, link rates or NIC parsing
 For DPDK-managed DOCA ports, the documented HWS setting is `dv_flow_en=2`.
 DOCA LPM needs a preceding root pipe. Validate pairing/forwarding for both
 directions in the selected mode. See the [DOCA Flow guide](https://networking-docs.nvidia.com/doca/archive/3-5-0/doca-flow).
+
+The implemented application uses host-side VNF/HWS, not switch mode or
+representors. It requires two PCI functions on the same reserved adapter.
+Interfaces on every function of that adapter must be DOWN, unaddressed, free
+of upper/master interfaces and have no active VFs. The application preserves
+the configured MTU and supports MTU <= 1500. It does not install drivers, flash
+firmware, allocate hugepages, change operating mode or unbind the kernel driver.
+Checks use the current network namespace and sysfs; exclusive ownership and
+other namespaces/processes still require a lab reservation check.
+
+Use a **separate two-port TRex stateless generator** for repeatable traffic,
+captures and subsequent rate sweeps. TRex's upstream documentation lists mlx5
+ConnectX-5/6 support; verify the exact release/card/firmware combination and
+generator rate before making a capacity claim. For initial low-rate functional
+work, two unused adapters in one server can form a direct-cable loop between
+DUT and generator, with disjoint CPUs and NUMA-local memory. Shared PCIe/CPU/memory
+resources make that arrangement unsuitable for an unqualified performance claim.
+See the [TRex upstream manual](https://github.com/cisco-system-traffic-generator/trex-core/blob/master/doc/trex_book.asciidoc).
+
+For physical replay, replace the synthetic input destination MACs with the DUT
+port MACs and the expected source/destination MACs with the configured DUT/peer
+MACs. Keep the synthetic IP routing inputs unchanged. Start capture before sending
+traffic, begin only after the application's `ready` event, observe the complete
+window, and compare complete frames and per-port multiplicity. Retain the raw
+capture and configuration privately. Do not remove failing checksum cases to
+make hardware parity pass; record a compatibility decision explicitly.
 
 ## Gate 2: functional equivalence (to expand/run on both implementations)
 
@@ -140,6 +171,7 @@ Sources checked 2026-10-06:
 
 - [DPDK 25.11 l3fwd guide](https://doc.dpdk.org/guides-25.11/sample_app_ug/l3_forward.html)
 - [Pinned l3fwd source](https://github.com/DPDK/dpdk/tree/ed957165eadbe60a47d5ec223578cdd1c13d0bd9/examples/l3fwd)
+- [DOCA 3.3 documentation](https://docs.nvidia.com/doca-documentation-v3-3-0.pdf) (implemented API target; installed headers/samples also checked)
 - [DOCA 3.5 supported stack matrix](https://networking-docs.nvidia.com/doca/archive/3-5-0/general-support)
 - [DOCA 3.5 release notes](https://networking-docs.nvidia.com/doca/archive/3-5-0/doca-release-notes)
 - [mlx5 PMD guide](https://doc.dpdk.org/guides-25.11/nics/mlx5.html)
