@@ -30,6 +30,11 @@ if doca.found()
         include_directories: inc, dependencies: [doca, dependency('doca-common')], c_args: app_flags,
         link_args: '-Wl,--wrap=doca_flow_entries_process')
     test('doca-completion-faults', completion_test)
+    cleanup_test = executable('test-flow-cleanup', 'tests/test_flow_cleanup.c',
+        include_directories: inc, dependencies: [doca, dependency('doca-common')], c_args: app_flags,
+        link_args: ['-Wl,--wrap=doca_flow_pipe_destroy', '-Wl,--wrap=doca_flow_port_pipes_flush',
+                    '-Wl,--wrap=doca_flow_port_stop', '-Wl,--wrap=doca_flow_destroy'])
+    test('doca-paired-port-cleanup', cleanup_test)
 else
     app_sources += 'src/flow_stub.c'
     # Explicitly retain these PMDs when testing against an uninstalled DPDK
