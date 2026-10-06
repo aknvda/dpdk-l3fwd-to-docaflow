@@ -143,9 +143,10 @@ active VFs, preserves the configured MTU, and rejects jumbo MTUs. These checks
 do not replace exclusive reservation and a topology/ownership check.
 
 Set the following variables privately to the reserved DUT ports, CPU and
-generator destination MACs. Keep SSH settings and any needed credentials in a
-permission-restricted `.env` **outside the checkout**; `.env` files are also
-ignored by Git and container builds. The application itself does not use passwords.
+generator destination MACs. Keep SSH settings and any needed credentials in
+`.env` at the repository root, with permissions set to `0600`. Both `.env` and
+`.env.*` are excluded by `.gitignore` and `.dockerignore`; keep them untracked.
+The application itself does not use passwords.
 
 ```bash
 : "${DUT_PCI_0:?}" "${DUT_PCI_1:?}" "${DUT_CPU:?}" "${PEER_MAC_0:?}" "${PEER_MAC_1:?}"
