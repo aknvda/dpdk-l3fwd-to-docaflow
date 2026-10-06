@@ -10,6 +10,9 @@ smoke test. That change does not alter packet processing or generated fixtures.
 Startup diagnostics, cancellation and interface restoration: `3077dd6`; both
 builds, all C/Python suites, portable sanitizers and the three physical failure
 scenarios below were verified for this revision.
+Dependency-ordered DOCA teardown: `35e1edc`; both builds, 6 DOCA C suites,
+4 software C suites and 8 Python tests against each executable pass. The physical
+admission and restart results below use this revision.
 
 | Check | Result |
 | --- | --- |
@@ -22,10 +25,11 @@ scenarios below were verified for this revision.
 | Container recipe | Linux ARM build succeeded. End-to-end container replay was not established; the local runtime later returned an executable-format error. Use the validated native Linux path for the current baseline. |
 | Migrated DOCA application | PASS: compiles/links against DOCA Flow 3.3.0109 and packaged DPDK 25.11.0+doca2601.2, GCC 13.3.0; warnings treated as errors |
 | Migrated software application | PASS: compiles/links against the same upstream DPDK 25.11.0 source build used for the baseline |
-| C tests | PASS: 5 suites in the DOCA build (forwarding core, EAL admission, device admission, kernel interface restoration, completion fault injection); 4 in the software build |
+| C tests | PASS: 6 suites in the DOCA build (forwarding core, EAL admission, device admission, kernel interface restoration, completion fault injection, paired-port/pipe cleanup); 4 in the software build |
 | Sanitizers | PASS: portable forwarding, EAL admission, device admission and kernel interface restoration suites with AddressSanitizer and UBSan on macOS ARM and Linux x86_64 |
 | Extended packet comparison | PASS: both real upstream and migrated software executables produced all 2326 expected frames across 1024 routes, 1140 on egress 0 and 1186 on egress 1; 30-second window per run |
-| Physical startup admission | FAIL: firmware rejected a required HCA capability query during `doca_flow_port_start`; no application pipes or entries installed |
+| Physical startup admission | PASS after separately approved firmware maintenance: DOCA 3.3.0109, packaged DPDK, ConnectX-6 Dx firmware 22.48.1000, VNF/HWS; all application pipes and entry completions accepted with 5 and 1024 routes |
+| Physical teardown and restart | PASS: two consecutive 1024-route runs reached ready, read counters and exited 0 without SDK error messages; both test ports returned DOWN with MTUs and management route preserved |
 | Failure cleanup on physical adapter | PASS after correction: both admitted ports returned to administrative DOWN, MTUs preserved, management route unchanged |
 | Hardware forwarding / throughput / latency | Not tested; no performance claim |
 
@@ -101,7 +105,7 @@ unwanted MTU reset. The implementation now chains misses through an RSS exceptio
 pipe, preserves the existing MTU and rejects jumbo MTUs before configuration.
 The final SDK builds and software packet runs include those corrections.
 
-Privileged physical startup was attempted on isolated ports. SDK logging exposed
+The initial privileged physical startup attempt on isolated ports exposed
 `BAD_PARAM_ERR` for the HCA capability query with `op_mod=0x41`, followed by
 `Failed to get hws cap`. The error occurs during port creation, before the
 application's LPM or rewrite rules can be evaluated. The tested firmware predates
@@ -123,8 +127,31 @@ release, and test-injected SIGTERM during real probing. All exited unsuccessfull
 without READY and restored both interfaces DOWN, preserved MTUs and preserved the
 management route. These are failure-path tests, not forwarding tests.
 
-The selected spare links report no cable. Hardware admission after firmware
-remediation, link wiring, generator capture and line-rate capacity remain open.
+After separately approved firmware maintenance, the DUT ran firmware 22.48.1000
+on both functions. The unchanged pipeline then installed successfully. This
+cleared the earlier capability-query failure, while exposing a teardown problem:
+the SDK reported busy groups even though the process returned success. Flushing
+all paired ports before stopping them was insufficient on its own. Retaining
+each pipe handle and explicitly destroying root, LPM, rewrite and exception pipes
+in dependency order removed those errors. All ports are flushed before any port
+is stopped. SDK-boundary regressions cover incoming pipe references, paired-port
+references, every partial pipeline creation prefix and continued cleanup after
+a port-stop error; the regressions failed before the fixes.
+
+With the final teardown implementation, a 5-route run and two consecutive
+1024-route runs each reached `ready`, returned counter snapshots and exited 0
+without SDK error messages. The two 1024-route runs also verified administrative
+DOWN, unchanged MTUs, no addresses on test ports and an unchanged management
+route afterward. The SDK still emits queue-depth adaptation and already-detached
+device warnings; those are retained in the private logs. This is evidence of
+control-plane admission, bounded route installation and restart, not a route
+installation performance benchmark or a maximum NIC capacity measurement.
+
+No packets were sent: the selected spare links report no cable and both hardware
+and software packet counters were zero. Link wiring, generator capture and
+line-rate capacity remain open. An existing isolated switch path or another
+wired testbed can substitute for new direct cables; functional testing does not
+require 100GbE. See [HARDWARE_TEST_REQUEST.md](HARDWARE_TEST_REQUEST.md).
 The checksum boundaries
 also expose an explicit hardware-equivalence question described in
 [MIGRATION.md](MIGRATION.md). This report establishes a built implementation and

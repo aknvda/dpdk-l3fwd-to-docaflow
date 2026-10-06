@@ -1,8 +1,9 @@
 # Validation requirements and acceptance gates
 
 Status: the application builds against DOCA 3.3 and has passed software packet
-comparison through 1024 routes. A physical startup attempt failed at the firmware
-capability query; hardware equivalence and performance remain open. See RESULTS.md
+comparison through 1024 routes. Physical rule installation, teardown and restart
+now pass through 1024 routes after firmware maintenance. Wire packet equivalence
+and performance remain open. See RESULTS.md
 for measured results.
 
 ## Minimum physical lab
@@ -60,7 +61,7 @@ The extended software test adds TTL/checksum boundaries and route-table scaling
 through the pinned upstream limit: `--extended --route-count 1024`. This is
 functional route coverage, not a hardware-capacity or throughput measurement.
 
-## Gate 1: device and SDK admission (physical attempt failed; remediation pending)
+## Gate 1: device and SDK admission (control plane passed; traffic checks pending)
 
 1. Save the read-only inventory and map PCI addresses, port IDs, physical links,
    PF/VF/SF/representors, NUMA nodes and application CPU affinity.
