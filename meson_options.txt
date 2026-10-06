@@ -1,0 +1,2 @@
+option('doca', type: 'feature', value: 'enabled', description: 'Build the real DOCA Flow backend')
+option('pcap_driver_dir', type: 'string', value: '', description: 'Explicit shared PMD directory for software tests against an uninstalled DPDK build')

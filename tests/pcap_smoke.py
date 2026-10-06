@@ -8,6 +8,7 @@ import argparse
 from collections import Counter
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import signal
@@ -87,21 +88,64 @@ def read_pcap(path):
     return frames
 
 
-def generate(directory):
+def generate(directory, extended=False, route_count=5):
     expected, manifest = {0: [], 1: []}, []
+    routes = (ROOT/'configs/routes-v4.cfg').read_text()
+    cases = list(CASES)
+    for index in range(route_count-5):
+        dst = str(ipaddress.IPv4Address('10.128.0.0') + index)
+        routes += f'R{dst}/32 {index % 2}\n'
+        cases.append((dst, index % 2))
+    (directory/'routes-v4.cfg').write_text(routes)
     ident = 0
     for ingress in (0, 1):
         inputs = []
-        for dst, route_port in CASES:
-            for size in (60, 124, 508, 1514):
+        for case, (dst, route_port) in enumerate(cases):
+            sizes = (60, 124, 508, 1514) if case < len(CASES) else (124,)
+            ttls = (0, 1, 2, 64, 255) if extended and case < len(CASES) else (64,)
+            for size, ttl in ((size, ttl) for size in sizes for ttl in ttls):
                 egress = ingress if route_port is None else route_port
-                inputs.append(packet(dst, size, ident, 64, PCAP_MACS[ingress],
-                                     bytes.fromhex('020000000099')))
-                expected[egress].append(packet(dst, size, ident, 63,
-                                              DEST_MACS[egress], PCAP_MACS[egress]))
+                frame = packet(dst, size, ident, ttl, PCAP_MACS[ingress],
+                               bytes.fromhex('020000000099'))
+                inputs.append(frame)
+                output = bytearray(frame)
+                output[:12] = DEST_MACS[egress] + PCAP_MACS[egress]
+                output[22] = (ttl-1) % 256
+                # Pinned x86/ARM little-endian l3fwd increments the stored word.
+                # The differential run independently checks that this oracle
+                # matches the real upstream executable, including carry cases.
+                old = int.from_bytes(frame[24:26], 'little')
+                output[24:26] = ((old+1) % 65536).to_bytes(2, 'little')
+                expected[egress].append(bytes(output))
                 manifest.append(dict(id=ident, ingress=ingress, egress=egress,
-                                     dst=dst, frame_bytes_without_fcs=size))
+                                     dst=dst, ttl=ttl, frame_bytes_without_fcs=size))
                 ident += 1
+        if extended:
+            # Both representations of one's-complement zero are valid on input.
+            # Upstream's raw increment differs from RFC checksum correction for
+            # the 0xffff representation. Keep this edge visible to HW validation.
+            for dst, route_port in CASES:
+                egress = ingress if route_port is None else route_port
+                frame = bytearray(packet(dst, 60, 0, 64, PCAP_MACS[ingress],
+                                         bytes.fromhex('020000000099')))
+                base_checksum = int.from_bytes(frame[24:26], 'big')
+                for target in (0, 0xfeff, 0xff00, 0xffff):
+                    # Adjust the ID field using one's-complement arithmetic.
+                    # The other header words stay unchanged.
+                    frame[18:20] = ((base_checksum-target) % 65535).to_bytes(2, 'big')
+                    encoding = target.to_bytes(2, 'big')
+                    frame[24:26] = encoding
+                    assert checksum(frame[14:34]) == 0
+                    inputs.append(bytes(frame))
+                    output = bytearray(frame)
+                    output[:12] = DEST_MACS[egress] + PCAP_MACS[egress]
+                    output[22] = 63
+                    old = int.from_bytes(encoding, 'little')
+                    output[24:26] = ((old+1) % 65536).to_bytes(2, 'little')
+                    expected[egress].append(bytes(output))
+                    manifest.append(dict(id=ident, ingress=ingress, egress=egress,
+                                         dst=dst, checksum_boundary=encoding.hex()))
+                    ident += 1
         write_pcap(directory / f'rx{ingress}.pcap', inputs)
     for port, frames in expected.items():
         write_pcap(directory / f'expected{port}.pcap', frames)
@@ -112,21 +156,27 @@ def generate(directory):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', type=Path)
+    parser.add_argument('--target', choices=('upstream', 'software'), default='upstream',
+                        help='application CLI; software selects the migrated DPDK backend')
     parser.add_argument('--output', type=Path, default=ROOT / 'artifacts/pcap')
     parser.add_argument('--generate-only', action='store_true')
+    parser.add_argument('--extended', action='store_true', help='include TTL and checksum boundaries')
+    parser.add_argument('--route-count', type=int, default=5, help='5..1024; add synthetic /32 routes')
     parser.add_argument('--timeout', type=float, default=30,
                         help='observation window in seconds, including startup (default: 30)')
     args = parser.parse_args()
-    if args.timeout <= 0:
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error('--timeout must be positive')
+    if not 5 <= args.route_count <= 1024:
+        parser.error('--route-count must be in 5..1024')
     if not args.generate_only and (not args.binary or not hasattr(os, 'sched_getaffinity')):
         parser.error('run on Linux with --binary, or use --generate-only')
     directory = args.output.resolve() / ('run-'+uuid.uuid4().hex[:12])
     directory.mkdir(parents=True)
     print(f'Artifacts: {directory}', flush=True)
-    expected = generate(directory)
+    expected = generate(directory, args.extended, args.route_count)
     if args.generate_only:
-        print('Generated 48 input packets and expected outputs; no DUT executed.')
+        print(f'Generated {sum(map(len, expected.values()))} input packets and expected outputs; no DUT executed.')
         return
     cpu = min(os.sched_getaffinity(0))
     command = [str(args.binary.resolve()), '--lcores', f'0@{cpu}',
@@ -134,12 +184,15 @@ def main():
     for port in (0, 1):
         command += ['--vdev', f'net_pcap{port},rx_pcap={directory}/rx{port}.pcap,'
                     f'tx_pcap={directory}/tx{port}.pcap']
-    command += ['--', '-p', '0x3', '--config', '(0,0,0),(1,0,0)',
+    if args.target == 'upstream':
+        command += ['--', '-p', '0x3', '--config', '(0,0,0),(1,0,0)',
                 '--lookup=lpm', '--mode=poll', '--no-numa', '--parse-ptype',
                 '--relax-rx-offload',
-                '--rule_ipv4', str(ROOT/'configs/routes-v4.cfg'),
-                '--rule_ipv6', str(ROOT/'configs/routes-v6.cfg'),
-                '--eth-dest', '0,02:00:00:00:00:10',
+                '--rule_ipv4', str(directory/'routes-v4.cfg'),
+                '--rule_ipv6', str(ROOT/'configs/routes-v6.cfg')]
+    else:
+        command += ['--', '--backend', 'software', '--routes', str(directory/'routes-v4.cfg')]
+    command += ['--eth-dest', '0,02:00:00:00:00:10',
                 '--eth-dest', '1,02:00:00:00:00:11']
     (directory/'command.json').write_text(json.dumps(command, indent=2)+'\n')
     # Observe the entire declared window: reaching the expected count early must
@@ -165,7 +218,9 @@ def main():
         raise RuntimeError(f'l3fwd exit code {process.returncode}; see {directory}/l3fwd.log')
     actual = {p: read_pcap(directory/f'tx{p}.pcap') for p in (0, 1)}
     compare_frames(expected, actual)
-    result = dict(status='PASS', scope='DPDK IPv4 PCAP only; no DOCA or performance validation',
+    result = dict(status='PASS', target=args.target,
+                  scope='DPDK IPv4 PCAP only; no DOCA or performance validation',
+                  routes=args.route_count, extended=args.extended,
                   observation_seconds=args.timeout,
                   packets=sum(map(len, actual.values())),
                   per_port={p: len(frames) for p, frames in actual.items()})
