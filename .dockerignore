@@ -3,3 +3,5 @@
 artifacts
 build
 upstream/dpdk/.git
+.env
+.env.*
