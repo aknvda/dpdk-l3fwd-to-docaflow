@@ -7,6 +7,9 @@ Implementation source: `b01012e` (IPv4 backends and tests). The expanded packet
 runs preceded the final strict MAC-argument validation change; both builds and
 all CLI tests were rerun afterward, followed by a passing 48-packet software
 smoke test. That change does not alter packet processing or generated fixtures.
+Startup diagnostics, cancellation and interface restoration: `3077dd6`; both
+builds, all C/Python suites, portable sanitizers and the three physical failure
+scenarios below were verified for this revision.
 
 | Check | Result |
 | --- | --- |
@@ -19,10 +22,12 @@ smoke test. That change does not alter packet processing or generated fixtures.
 | Container recipe | Linux ARM build succeeded. End-to-end container replay was not established; the local runtime later returned an executable-format error. Use the validated native Linux path for the current baseline. |
 | Migrated DOCA application | PASS: compiles/links against DOCA Flow 3.3.0109 and packaged DPDK 25.11.0+doca2601.2, GCC 13.3.0; warnings treated as errors |
 | Migrated software application | PASS: compiles/links against the same upstream DPDK 25.11.0 source build used for the baseline |
-| C tests | PASS: 4 suites in the DOCA build (forwarding core, EAL admission, device admission, completion fault injection); 3 in the software build |
-| Sanitizers | PASS: portable forwarding, EAL admission and device admission suites with AddressSanitizer and UBSan on macOS ARM and Linux x86_64 |
+| C tests | PASS: 5 suites in the DOCA build (forwarding core, EAL admission, device admission, kernel interface restoration, completion fault injection); 4 in the software build |
+| Sanitizers | PASS: portable forwarding, EAL admission, device admission and kernel interface restoration suites with AddressSanitizer and UBSan on macOS ARM and Linux x86_64 |
 | Extended packet comparison | PASS: both real upstream and migrated software executables produced all 2326 expected frames across 1024 routes, 1140 on egress 0 and 1186 on egress 1; 30-second window per run |
-| Hardware offload / throughput / latency | Not tested; no performance claim |
+| Physical startup admission | FAIL: firmware rejected a required HCA capability query during `doca_flow_port_start`; no application pipes or entries installed |
+| Failure cleanup on physical adapter | PASS after correction: both admitted ports returned to administrative DOWN, MTUs preserved, management route unchanged |
+| Hardware forwarding / throughput / latency | Not tested; no performance claim |
 
 ## Reproducing the passing baseline
 
@@ -96,8 +101,31 @@ unwanted MTU reset. The implementation now chains misses through an RSS exceptio
 pipe, preserves the existing MTU and rejects jumbo MTUs before configuration.
 The final SDK builds and software packet runs include those corrections.
 
-Hardware admission, link wiring, permission to use the reserved ports, generator
-capture and line-rate capacity have not been established. The checksum boundaries
+Privileged physical startup was attempted on isolated ports. SDK logging exposed
+`BAD_PARAM_ERR` for the HCA capability query with `op_mod=0x41`, followed by
+`Failed to get hws cap`. The error occurs during port creation, before the
+application's LPM or rewrite rules can be evaluated. The tested firmware predates
+the HWS minimum documented by the pinned DPDK release. This is an admission
+failure, not evidence of a working offload path or proof that an upgrade alone
+will validate every action combination.
+
+The initial failure also showed that mlx5 port stop leaves Linux's administrative
+UP flag set. Cleanup now restores the captured kernel interfaces independently of
+DPDK port handles, after SDK/DPDK teardown. It also handles ordinary startup
+cancellation. Kernel restoration and cancellation regression tests failed before
+the fixes and passed afterward. SDK warnings/errors and the failing API expression are now
+reported to stderr; retain these raw logs privately because SDK messages can
+contain device identifiers.
+
+Three cleanup scenarios were also exercised against the isolated physical adapter:
+the actual firmware rejection, a test-injected error after real probing and ethdev
+release, and test-injected SIGTERM during real probing. All exited unsuccessfully
+without READY and restored both interfaces DOWN, preserved MTUs and preserved the
+management route. These are failure-path tests, not forwarding tests.
+
+The selected spare links report no cable. Hardware admission after firmware
+remediation, link wiring, generator capture and line-rate capacity remain open.
+The checksum boundaries
 also expose an explicit hardware-equivalence question described in
 [MIGRATION.md](MIGRATION.md). This report establishes a built implementation and
 software corpus parity, not a completed hardware migration acceptance test.
