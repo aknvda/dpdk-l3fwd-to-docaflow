@@ -203,15 +203,14 @@ device warnings; those are retained in the private logs. This is evidence of
 control-plane admission, bounded route installation and restart, not a route
 installation performance benchmark or a maximum NIC capacity measurement.
 
-No packets were sent: the selected spare links report no cable and both hardware
+No packets were sent in those early startup runs: the spare links reported no cable and both hardware
 and software packet counters were zero. Link wiring, generator capture and
 line-rate capacity remain open. An existing isolated switch path or another
 wired testbed can substitute for new direct cables; functional testing does not
 require 100GbE. See [HARDWARE_TEST_REQUEST.md](HARDWARE_TEST_REQUEST.md).
-The checksum boundaries
-also expose an explicit hardware-equivalence question described in
-[MIGRATION.md](MIGRATION.md). This report establishes a built implementation and
-software corpus parity, not a completed hardware migration acceptance test.
+Subsequent internal PHY runs, reported at the top of this document, establish
+hardware forwarding and the exact checksum compatibility boundary described in
+[MIGRATION.md](MIGRATION.md).
 
 ## Repeatable physical packet runner
 
@@ -269,5 +268,6 @@ exited the DUT with code 0 and no SDK errors, and restored all four interfaces.
 Independent before/after snapshots confirmed identical interface state, IPv6
 settings, IPv4 and IPv6 default routes, physical packet/error/discard counters
 and free hugepage counts. No DUT process remained. These results validate the
-runner's native execution and no-link cleanup; actual hardware packet equivalence
-and performance remain open until a connected test path is available.
+runner's native execution and no-link cleanup. Later internal PHY tests establish
+hardware forwarding without external connectivity; external-wire and performance
+coverage remain open.
