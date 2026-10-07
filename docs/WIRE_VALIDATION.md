@@ -3,7 +3,7 @@
 `tests/wire_smoke.py` compares a two-port DOCA DUT with output captured from
 unmodified upstream l3fwd. It uses two generator ports on a separate adapter in
 the same Linux host. This is a bounded, low-rate functional test. It does not
-measure throughput, latency, maximum route capacity or Vera/Substrate scaling.
+measure throughput, latency or maximum route capacity.
 
 For the cable-free alternative using only the DUT, see
 [INTERNAL_LOOPBACK.md](INTERNAL_LOOPBACK.md). That fixture has passed actual

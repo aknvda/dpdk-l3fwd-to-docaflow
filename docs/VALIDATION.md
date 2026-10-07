@@ -200,14 +200,14 @@ baseline change and resource sizing, not just a larger configuration file.
 ## Gate 4: larger scale / multiplexing (later experiment)
 
 Sweep route count, active traffic flows, and isolated application/tenant instances
-as separate axes. If comparing a Vera + Substrate deployment, define the ratio
+as separate axes. For a multiplexing experiment, define the ratio
 explicitly (for example, N isolated instances per M pinned physical cores), run
 each ratio on every comparison arm, and hold aggregate offered load constant for
 the isolation experiment. Also run a separate fixed-load-per-instance experiment
 to find aggregate saturation. Record isolation mechanism, scheduler settings,
 overcommit, rule budgets, throughput per instance, fairness and tail latency.
 
-This is a proposed experimental design, not evidence of a Vera/Substrate benefit.
+This is a proposed experimental design; scaling benefits remain unmeasured.
 First prove correctness at low scale; then increase until a measured resource
 limit is reached. More instances alone do not create more independent LPM routes.
 

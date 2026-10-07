@@ -66,9 +66,9 @@ retains its documented difference; its PASS is not an exact-equivalence result.
 See [INTERNAL_LOOPBACK.md](INTERNAL_LOOPBACK.md) for reproducible commands.
 
 The test hook uses two additional pipes per port to terminate returned frames in
-the kernel. External cables, optics, peer interoperability, line rate, latency
-and Vera/Substrate benefits remain unmeasured. Full malformed-frame, options and
-fragment equivalence are not established by this bounded IPv4/UDP corpus.
+the kernel. External cables, optics, peer interoperability, line rate and latency
+remain unmeasured. Full malformed-frame, options and fragment equivalence are not
+established by this bounded IPv4/UDP corpus.
 
 ## Earlier baseline and control-plane evidence
 

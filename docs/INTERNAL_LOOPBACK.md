@@ -101,9 +101,9 @@ cleanup; independently inspect the reserved ports before restarting.
 
 This validates the real parser, route selection, actions, software exceptions and
 delivery through the PHY return path. It does not validate cables/optics, remote
-peer behavior, external link failure recovery, line rate, latency, full malformed
-packet equivalence or a Vera/Substrate performance benefit. External-wire testing
-can follow when that evidence is needed; it is not required to repeat this test.
+peer behavior, external link failure recovery, line rate, latency or full malformed
+packet equivalence. External-wire testing can follow when that evidence is needed;
+it is not required to repeat this test.
 
 Sources: [NVIDIA MFT mlxlink loopback controls](https://networking-docs.nvidia.com/mftswum/4350/mlxlink-utility),
 the installed DOCA 3.3 `flow_fwd_target` sample and headers, and
