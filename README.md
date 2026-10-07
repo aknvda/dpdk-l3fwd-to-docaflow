@@ -17,6 +17,9 @@ link interoperability and Vera/Substrate benefits remain unmeasured. See
 [migration behavior](docs/MIGRATION.md), [results](docs/RESULTS.md) and
 [lab requirements](docs/VALIDATION.md) for exact coverage and reproducible commands.
 
+Start with the [focused migration guide](docs/MIGRATION_GUIDE.md) for the code mapping,
+policy choice, build commands and end-to-end validation procedure.
+
 ## Layout
 
 | Path | Purpose |

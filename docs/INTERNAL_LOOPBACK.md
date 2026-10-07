@@ -6,6 +6,10 @@ DOCA admission/LPM and selected rewrite pipeline, and captures the returned egre
 Same-port and TTL exceptions traverse the actual application software path.
 This is a functional test, not a throughput or latency benchmark.
 
+Status: the full 1024-route / 2326-packet corpus passed twice with exact upstream
+bytes in the default policy and once under the explicit hardware policy. See
+[results](RESULTS.md) and the [migration guide](MIGRATION_GUIDE.md).
+
 ## Requirements
 
 - One exclusively reserved two-port DUT adapter, separate from management, with

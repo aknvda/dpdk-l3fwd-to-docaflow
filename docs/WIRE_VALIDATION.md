@@ -1,4 +1,4 @@
-# Physical IPv4 packet validation
+# Optional external-wire IPv4 packet validation
 
 `tests/wire_smoke.py` compares a two-port DOCA DUT with output captured from
 unmodified upstream l3fwd. It uses two generator ports on a separate adapter in

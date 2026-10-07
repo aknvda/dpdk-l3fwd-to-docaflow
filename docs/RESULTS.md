@@ -34,6 +34,16 @@ or a speedup. Both strict runs recorded `upstream_byte_equivalent: true`.
 | Rebuilt software backend | Full 2326-frame / 1024-route PCAP PASS, 30-second window |
 | Portable C sanitizer checks | PASS, including selected-port bounds, rejected-frame immutability and TTL/checksum boundaries |
 
+### Normal application startup
+
+The merged application binary was also checked with the loopback test hook
+**disabled**, in both `upstream` and `hardware` policies. Both installed 1024
+routes, emitted `ready` with `internal_loopback_test: false`, collected zero
+traffic counters and exited 0 without SDK errors. Independent checks confirmed
+interface/IPv6 settings, default routes, disabled PHY loopback, no remaining DUT
+process and the original free hugepage count. This is a normal-mode control-plane
+check; packet correctness is established by the internal PHY tests above.
+
 ### Explicit full hardware forwarding policy
 
 `--checksum-policy hardware` retains the original offload path. Its regression
@@ -256,9 +266,10 @@ unaddressed with MTU 1500, restored per-interface IPv6 settings, unchanged defau
 management route, unchanged physical packet counters and unchanged free hugepage
 counts. No physical packet forwarding claim follows from these cleanup checks.
 
-The physical acceptance path still needs connected links. It must pass exact
-packet bytes and both offload/exception counters before hardware equivalence
-can be claimed; throughput and latency need their own subsequent experiments.
+The external-wire fixture requires connected links and must pass its selected
+packet-byte contract and policy-specific counters before external interoperability
+can be claimed. The internal PHY acceptance reported above is complete without
+those links. Throughput and latency require separate experiments.
 
 ### Post-review hardening (2026-10-07)
 
