@@ -198,3 +198,20 @@ counts. No physical packet forwarding claim follows from these cleanup checks.
 The physical acceptance path still needs connected links. It must pass exact
 packet bytes and both offload/exception counters before hardware equivalence
 can be claimed; throughput and latency need their own subsequent experiments.
+
+### Post-review hardening (2026-10-07)
+
+Revision `95e5052` fixes three issues found during independent branch review:
+cancellation during DUT wait or interface restoration, a failed port-down action
+skipping IPv6 restoration, and physical NIC error/discard counters not affecting
+acceptance. SIGINT/SIGTERM are now deferred through each cleanup phase, every
+restoration step is attempted, and the documented required NIC error/discard
+counters must have zero deltas. Missing counters also prevent PASS.
+
+The regressions failed before the fixes. The final local suite passed 24 tests
+with five compiled-executable checks skipped (29 total). It includes controller
+cleanup with SIGINT and SIGTERM during both shutdown phases, actual child-process
+reaping, failed port-down restoration, and counter-error injection on every port.
+These changes have **not yet been rerun on Linux or the physical adapter**: SSH
+was unavailable in the resumed session. Earlier native Linux and hardware results
+above apply to the explicitly recorded earlier revisions, not these new paths.

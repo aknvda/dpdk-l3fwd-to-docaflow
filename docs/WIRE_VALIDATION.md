@@ -27,7 +27,8 @@ last physical run found no carrier on the reserved test links. See [RESULTS.md](
   memory beforehand. Reserve a CPU for the DUT. The runner requests 128 MiB of
   DPDK memory and uses a unique, in-memory EAL instance.
 - The NIC driver must expose `rx_packets_phy` and `tx_packets_phy` via
-  `ethtool -S`. Keep IPv4/IPv6 address management and other network configuration
+  `ethtool -S`, plus every required error/discard counter listed below. Missing
+  counters prevent acceptance. Keep IPv4/IPv6 address management and other network configuration
   services away from the reserved ports during the test.
 
 The runner does not flash firmware, change adapter modes, rebind drivers or
@@ -108,7 +109,10 @@ The runner temporarily disables IPv6 on only the four selected interfaces to
 prevent automatic link-local addresses, then restores the saved settings.
 It stops the DUT with SIGINT, restores all four interfaces DOWN and verifies
 identity, MTU, MAC, absence of addresses and the default management route.
-Ordinary exceptions and SIGINT/SIGTERM enter cleanup. SIGKILL, a host crash or
+Ordinary exceptions and SIGINT/SIGTERM enter cleanup. Signals received while
+stopping the DUT or restoring interfaces are deferred until that cleanup phase
+finishes, then reported as cancellation. A failed restoration step does not skip
+the remaining steps or ports; errors still prevent acceptance. SIGKILL, a host crash or
 a stuck SDK may prevent clean teardown; inspect the reserved devices before
 retrying. Restoration failure prevents PASS even if packets matched.
 
@@ -120,8 +124,27 @@ A physical `PASS` requires all of the following:
   duplicate, corrupted or wrong-port frames during the observation window.
 - Exact expected hardware cross-port and software exception Rx/Tx counts;
   no application drops, capture drops, SDK errors or unsuccessful DUT exit.
-- Physical Rx/Tx counter deltas on every DUT/generator port covering the corpus.
+- Physical Rx/Tx counter deltas on every DUT/generator port covering the corpus,
+  and zero deltas for all required NIC error/discard counters.
 - Successful interface/settings restoration after the DUT exits.
+
+The driver must expose these error/discard counters on every port:
+
+```text
+rx_crc_errors_phy          rx_in_range_len_errors_phy
+rx_out_of_range_len_phy     rx_oversize_pkts_phy
+rx_symbol_err_phy           rx_unsupported_op_phy
+rx_discards_phy             tx_discards_phy
+tx_errors_phy               rx_undersize_pkts_phy
+rx_fragments_phy            rx_jabbers_phy
+```
+
+These are the physical-port counters defined by the
+[Linux v6.8 mlx5 driver](https://github.com/torvalds/linux/blob/v6.8/drivers/net/ethernet/mellanox/mlx5/core/en_stats.c#L773).
+Any change, including a counter reset, prevents PASS. Missing counters fail
+explicitly; there is no silent reduced-coverage mode. Packet totals remain
+lower bounds, separate from the exact application/capture checks and the zero
+error/discard gate. Driver availability must be verified on the actual testbed.
 
 `result.json` is written after cleanup. Exit 0 means `PASS` or the explicitly
 requested `PREFLIGHT`; callers must also inspect `status`. Missing carrier
