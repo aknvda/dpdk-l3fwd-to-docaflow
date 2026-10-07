@@ -1,6 +1,6 @@
 # Verified results
 
-2026-10-06. Sanitized report: host identifiers, network addresses, device serials
+Updated 2026-10-07. Sanitized report: host identifiers, network addresses, device serials
 and raw inventories are intentionally kept outside the repository.
 
 Implementation source: `b01012e` (IPv4 backends and tests). The expanded packet
@@ -13,6 +13,15 @@ scenarios below were verified for this revision.
 Dependency-ordered DOCA teardown: `35e1edc`; both builds, 6 DOCA C suites,
 4 software C suites and 8 Python tests against each executable pass. The physical
 admission and restart results below use this revision.
+Physical test runner: `f7cebfd`, with Linux socket integration and the unnamed
+Unix socket address correction in `e3d3cb3`. The 2026-10-06 wire-runner evidence
+below was collected before that correction; all 24 Python tests against each
+executable and both C suites were then rerun and passed with it. The namespace
+fixture passed before the correction. Final runner hardening is in `95e5052`.
+On 2026-10-07, all 29 Python tests passed against each Linux executable, all
+6 DOCA and 4 software C suites passed, and the namespace and physical no-link
+tests were repeated. Native source, configuration and test files were verified
+to match the tested checkout (`c685d0b`, which adds documentation to `95e5052`).
 
 | Check | Result |
 | --- | --- |
@@ -31,6 +40,11 @@ admission and restart results below use this revision.
 | Physical startup admission | PASS after separately approved firmware maintenance: DOCA 3.3.0109, packaged DPDK, ConnectX-6 Dx firmware 22.48.1000, VNF/HWS; all application pipes and entry completions accepted with 5 and 1024 routes |
 | Physical teardown and restart | PASS: two consecutive 1024-route runs reached ready, read counters and exited 0 without SDK error messages; both test ports returned DOWN with MTUs and management route preserved |
 | Failure cleanup on physical adapter | PASS after correction: both admitted ports returned to administrative DOWN, MTUs preserved, management route unchanged |
+| Extended upstream reference for wire replay | PASS: fresh actual upstream run, 1024 routes and 2326 complete output frames |
+| Wire reference, isolation, process and capture tests | PASS: all 29 Python tests against each compiled executable on Linux, no skips; includes cancellation during cleanup and rejection of changed or missing NIC error counters |
+| Linux packet-socket integration | HARNESS_PASS on final runner: real AF_PACKET/veth checks in a temporary network namespace; ordinary delivery, delayed duplicate rejection and wrong-port rejection; no DOCA emulation |
+| Required physical counter availability | PASS: both packet counters and all twelve error/discard counters available on each of four reserved ports |
+| Physical runner with absent links | BLOCKED on final runner: 1024-route DOCA ready, no carrier, no traffic sent, DUT exit 0 with no SDK errors and all four reserved interfaces/settings restored |
 | Hardware forwarding / throughput / latency | Not tested; no performance claim |
 
 ## Reproducing the passing baseline
@@ -156,3 +170,62 @@ The checksum boundaries
 also expose an explicit hardware-equivalence question described in
 [MIGRATION.md](MIGRATION.md). This report establishes a built implementation and
 software corpus parity, not a completed hardware migration acceptance test.
+
+## Repeatable physical packet runner
+
+[WIRE_VALIDATION.md](WIRE_VALIDATION.md) documents the upstream-reference and
+physical replay commands. The runner uses captured output from an actual
+passing upstream run, verifies that inputs and routes match the declared corpus,
+and changes only Ethernet MAC addresses for the physical topology. It checks
+complete frame bytes, hardware/software counters, capture drops and physical
+port counter deltas. Checksum edge cases are retained unchanged.
+
+The real Linux packet-socket fixture passed three cases: ordinary delivery,
+detection of a delayed duplicate and rejection of a frame on the wrong port.
+It exercises the same capture/replay function in an isolated veth namespace;
+its result is explicitly `HARNESS_PASS`, not a DOCA or physical NIC result.
+The first full Linux unit run then exposed an unnamed Unix socket address of
+`None`; the capture code now examines outgoing-packet metadata only for tuple
+addresses. The real socketpair regression failed before that fix. Both native
+24-test Python runs and both C suites passed afterward.
+
+The physical runner's read-only admission succeeded. Its subsequent execution
+reached the DOCA `ready` event with 1024 routes, timed out waiting for the absent
+links and returned `BLOCKED` with exit 2. `traffic_sent` was false and `restored`
+was true. The DUT exited 0 with no SDK error messages and zero packet counters.
+Independent before/after checks confirmed all four reserved ports DOWN and
+unaddressed with MTU 1500, restored per-interface IPv6 settings, unchanged default
+management route, unchanged physical packet counters and unchanged free hugepage
+counts. No physical packet forwarding claim follows from these cleanup checks.
+
+The physical acceptance path still needs connected links. It must pass exact
+packet bytes and both offload/exception counters before hardware equivalence
+can be claimed; throughput and latency need their own subsequent experiments.
+
+### Post-review hardening (2026-10-07)
+
+Revision `95e5052` fixes three issues found during independent branch review:
+cancellation during DUT wait or interface restoration, a failed port-down action
+skipping IPv6 restoration, and physical NIC error/discard counters not affecting
+acceptance. SIGINT/SIGTERM are now deferred through each cleanup phase, every
+restoration step is attempted, and the documented required NIC error/discard
+counters must have zero deltas. Missing counters also prevent PASS.
+
+The regressions failed before the fixes. The final local suite passed 24 tests
+with five compiled-executable checks skipped (29 total). It includes controller
+cleanup with SIGINT and SIGTERM during both shutdown phases, actual child-process
+reaping, failed port-down restoration, and counter-error injection on every port.
+
+After lab access was restored on 2026-10-07, the final revision passed all
+29 tests against each compiled Linux executable with no skips, all 6 DOCA and
+4 software C suites, and the three real AF_PACKET namespace cases. All fourteen
+required physical counters were present on each of the four reserved ports.
+
+The final physical execution installed all 1024 routes and reached `ready`,
+then returned `BLOCKED` because the test links had no carrier. It sent no traffic,
+exited the DUT with code 0 and no SDK errors, and restored all four interfaces.
+Independent before/after snapshots confirmed identical interface state, IPv6
+settings, IPv4 and IPv6 default routes, physical packet/error/discard counters
+and free hugepage counts. No DUT process remained. These results validate the
+runner's native execution and no-link cleanup; actual hardware packet equivalence
+and performance remain open until a connected test path is available.

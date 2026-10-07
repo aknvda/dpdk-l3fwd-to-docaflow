@@ -4,10 +4,12 @@ An incremental migration of the official DPDK `l3fwd` application to NVIDIA
 DOCA Flow. Start with two-port IPv4 longest-prefix-match forwarding, preserve
 the software baseline, then validate a hardware forwarding path against it.
 
-**Current stage: IPv4 implementation, software parity and hardware rule installation.**
+**Current stage: IPv4 implementation and repeatable physical validation runner.**
 The application has a DOCA Flow 3.3 backend and a DPDK software backend. Physical
-DOCA rule installation and teardown pass through 1024 routes. Packet forwarding,
-hardware equivalence and performance remain unverified. See
+DOCA rule installation and teardown pass through 1024 routes. The physical runner
+checks upstream packet bytes, hardware/software counters and port restoration.
+Physical packet equivalence and performance remain unverified; the last physical
+run was blocked by absent link carrier. See
 [migration behavior](docs/MIGRATION.md), [results](docs/RESULTS.md) and
 [lab requirements](docs/VALIDATION.md) for the exact boundaries.
 
@@ -18,7 +20,7 @@ hardware equivalence and performance remain unverified. See
 | `upstream/dpdk` | Unmodified upstream submodule, v25.11.0 at `ed957165eadbe60a47d5ec223578cdd1c13d0bd9` |
 | `configs/` | Shared route inputs, including overlapping IPv4 prefixes |
 | `src/` | IPv4 routes/forwarding, DPDK runtime, DOCA pipes and device admission |
-| `tests/` | Packet corpus, strict per-port PCAP comparison and negative tests |
+| `tests/` | Packet corpus, PCAP/wire validation, isolation and negative tests |
 | `containers/` | Linux build of upstream DPDK with the PCAP virtual driver |
 | `scripts/lab_inventory.sh` | Read-only Linux testbed inventory |
 | `docs/` | Design, requirements and measured results |
@@ -124,6 +126,11 @@ These checks do not probe physical ports. The DOCA test suite includes injected
 completion failures and timeouts; it does not simulate hardware forwarding.
 
 ## Hardware validation
+
+Use the [physical packet runner](docs/WIRE_VALIDATION.md) for the reproducible
+upstream-to-DOCA comparison on two reserved adapters in one Linux host. It includes
+read-only preflight, paced replay, full-frame comparison and automatic cleanup.
+The manual command below is a startup/control-plane check.
 
 ```bash
 bash scripts/lab_inventory.sh > /path/outside/this/repo/lab-inventory.txt

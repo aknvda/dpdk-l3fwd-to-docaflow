@@ -3,8 +3,9 @@
 Status: the application builds against DOCA 3.3 and has passed software packet
 comparison through 1024 routes. Physical rule installation, teardown and restart
 now pass through 1024 routes after firmware maintenance. Wire packet equivalence
-and performance remain open. See RESULTS.md
-for measured results.
+and performance remain open. The [physical runner](WIRE_VALIDATION.md) is
+implemented and has passed Linux packet-socket and no-link cleanup tests. See
+[RESULTS.md](RESULTS.md) for measured results.
 
 ## Minimum physical lab
 
@@ -27,7 +28,7 @@ valid alternatives to new direct cables. See the
 | DUT | A dedicated Linux server with two available Ethernet ports on a supported NVIDIA device. Confirm LPM, rewrite, TTL/checksum and forwarding combinations with the exact SDK/device/mode before committing to a card. BlueField-3 or ConnectX-7 are candidate platforms to evaluate, not a blanket capability guarantee. |
 | CPU/RAM | Suggested lab allocation: at least 8 available cores and 32 GB RAM, with reserved CPU cores and NUMA-local memory. These are project sizing suggestions, not vendor minimums. No GPU is required. |
 | Software | One supported OS/kernel + DOCA-Host/SDK + NIC firmware combination. Ubuntu 24.04 is a candidate. Pin package versions after inventory. Build the DOCA application against its supported DPDK, not an arbitrary upstream ABI. |
-| Traffic source | A separate Linux generator with two ports at the same link speed, or a hardware tester. It must generate and measure the aggregate bidirectional target rate. Cables/optics, MTU and FEC must match. A single generator host can terminate both directions. |
+| Traffic source | For the implemented low-rate functional runner, a separate two-port adapter in the same Linux host. For performance, a separate Linux generator with two ports at the same link speed, or a hardware tester. It must generate and measure the aggregate bidirectional target rate. Cables/optics, MTU and FEC must match. A single generator host can terminate both directions. |
 | Access | SSH, source/build access and dedicated interfaces; administrative access for driver installation, hugepages, device permissions and mode configuration. Firmware or mode changes are separate lab operations, not performed by the inventory script. |
 | Measurements | Per-port packet/byte/error counters; generator sequence/loss tracking; hardware flow counters and completion status; CPU and memory accounting; saved configs, commands and software/firmware versions. Hardware timestamping or a calibrated tester is preferred for latency. |
 
@@ -117,6 +118,8 @@ DUT and generator, with disjoint CPUs and NUMA-local memory. Shared PCIe/CPU/mem
 resources make that arrangement unsuitable for an unqualified performance claim.
 See the [TRex upstream manual](https://github.com/cisco-system-traffic-generator/trex-core/blob/master/doc/trex_book.asciidoc).
 
+The implemented [wire runner](WIRE_VALIDATION.md) performs the following replay
+sequence and checks exact hardware/software counters against the upstream corpus.
 For physical replay, replace the synthetic input destination MACs with the DUT
 port MACs and the expected source/destination MACs with the configured DUT/peer
 MACs. Keep the synthetic IP routing inputs unchanged. Start capture before sending
