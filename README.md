@@ -12,8 +12,8 @@ on real hardware using internal PHY loopback. All packets receive a CPU rewrite
 in this mode; it is hardware-assisted routing, not CPU-bypass forwarding.
 
 Explicit `--checksum-policy hardware` retains full offload for eligible packets,
-with ten documented checksum differences in this corpus. Performance, external
-link interoperability and Vera/Substrate benefits remain unmeasured. See
+with ten documented checksum differences in this corpus. Performance and external
+link interoperability remain unmeasured. See
 [migration behavior](docs/MIGRATION.md), [results](docs/RESULTS.md) and
 [lab requirements](docs/VALIDATION.md) for exact coverage and reproducible commands.
 

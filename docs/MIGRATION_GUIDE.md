@@ -1,5 +1,7 @@
 # Migrating DPDK l3fwd to DOCA Flow
 
+**Date:** October 08, 2026
+
 This guide walks through the implemented, hardware-tested migration in this
 repository. The result is a two-port IPv4 LPM application with a software backend
 and a DOCA Flow backend. It preserves an unmodified upstream executable as the
@@ -252,5 +254,5 @@ application and test runner do not consume passwords.
 This project is complete for the documented two-port IPv4 functional scope.
 IPv6/VLAN routing, ARP/ND or ICMP generation, dynamic updates, multiple workers,
 jumbos and full malformed/options/fragment equivalence are outside that scope.
-Per-flow ordering, external-link recovery, throughput/latency and Vera/Substrate
-multiplexing require separate experiments in [VALIDATION.md](VALIDATION.md).
+Per-flow ordering, external-link recovery and throughput/latency require separate
+experiments in [VALIDATION.md](VALIDATION.md).
