@@ -266,9 +266,10 @@ unaddressed with MTU 1500, restored per-interface IPv6 settings, unchanged defau
 management route, unchanged physical packet counters and unchanged free hugepage
 counts. No physical packet forwarding claim follows from these cleanup checks.
 
-The physical acceptance path still needs connected links. It must pass exact
-packet bytes and both offload/exception counters before hardware equivalence
-can be claimed; throughput and latency need their own subsequent experiments.
+The external-wire fixture requires connected links and must pass its selected
+packet-byte contract and policy-specific counters before external interoperability
+can be claimed. The internal PHY acceptance reported above is complete without
+those links. Throughput and latency require separate experiments.
 
 ### Post-review hardening (2026-10-07)
 
