@@ -28,7 +28,8 @@ so the application applies the TTL/MAC changes once.
 The root admits untagged, unfragmented IPv4 packets with IHL 5, valid parser
 L3/checksum flags and TTL 2..255. There are 254 TTL entries, one LPM entry per
 route, one rewrite entry and one exception entry per ingress. Root matching,
-LPM support and the combined actions must still be validated on the target NIC.
+LPM support and the combined actions have passed internal PHY validation on the
+reported device/SDK combination; admit other combinations independently.
 Entries are completed individually for bounded resource use; insertion is not
 batched or optimized for control-plane throughput in this version.
 
@@ -55,17 +56,32 @@ Next-hop MAC addresses must be supplied explicitly for a physical test.
   than adding router-style TTL expiry and ICMP. These inputs are excluded from
   hardware rewriting and are part of the software differential corpus.
 - The upstream sample increments the stored IPv4 checksum word directly.
-  The software backend preserves that little-endian behavior. **Hardware checksum
-  equivalence remains an open acceptance gate.** Input checksum `0xfeff` becomes
+  The software backend preserves that little-endian behavior. **Hardware is not
+  byte-for-byte equivalent on checksum edge cases.** Input checksum `0xfeff` becomes
   `0xffff` in upstream, whereas full recomputation produces `0x0000` (both encode
   a valid output). A valid noncanonical `0xffff` input produces `0x0000` upstream
   after TTL decrement, while correct recomputation gives `0x0100`. The root cannot
   distinguish these checksum values using its current match fields. They are
-  included in the extended corpus, and hardware must not be called bytewise
-  equivalent until its output and an explicit compatibility policy are verified.
+  included in the extended corpus. Hardware testing confirmed ten differences
+  across 2326 packets. The runner defaults to strict upstream comparison and
+  fails on these differences. Its explicit `--checksum-policy hardware` contract
+  instead requires canonical IPv4 checksums on offloaded packets, while checking
+  every other byte and all software-path outputs against upstream. It writes
+  both expectations and the per-case differences before sending any traffic.
+  This is a documented behavioral difference, not exact upstream compatibility.
 - The original and migrated software programs pass a valid IPv4/UDP corpus.
   This does not imply equal behavior for every malformed frame, a full router
   implementation, or any proven hardware performance advantage.
+
+## Internal loopback test hook
+
+`--internal-loopback-test` requires the DOCA backend and physical-port opt-in.
+It adds a root source-MAC guard and a non-root kernel capture pipe. Returned
+packets with the egress port's source MAC terminate in the kernel; injected
+packets with distinct marker source MACs enter the existing IPv4 pipeline.
+The test runner temporarily enables internal PHY loopback on each reserved DUT
+port and restores it afterward. The application does not configure PHY loopback.
+Normal runs do not create these two test pipes. See [INTERNAL_LOOPBACK.md](INTERNAL_LOOPBACK.md).
 
 ## Installation failures and counters
 

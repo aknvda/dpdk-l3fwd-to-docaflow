@@ -4,6 +4,7 @@
 Same-host, low-rate functional validation only. Raw artifacts must remain private.
 """
 import argparse
+from contextlib import nullcontext
 import hashlib
 import json
 import math
@@ -16,11 +17,12 @@ import struct
 import subprocess
 import sys
 
-from pcap_smoke import write_pcap
+from pcap_smoke import write_pcap, compare_frames
 from wire_capture import capture_replay
 from wire_common import check_run, load_reference, read_events, stop_process, wait_ready
 from wire_ports import (HostControl, LinkUnavailable, admit_ports, ip_json,
                         isolated_ports, private_run_dir, wait_links)
+from phy_loopback import PhyControl, internal_phy, loopback_reference, check_loopback_deltas
 
 # mlx5 physical port counters, from Linux en_stats.c (802.3, 2863 and 2819).
 # See docs/WIRE_VALIDATION.md for the source and required driver contract.
@@ -32,12 +34,13 @@ ERROR_COUNTERS = ('rx_crc_errors_phy', 'rx_in_range_len_errors_phy',
                   'rx_fragments_phy', 'rx_jabbers_phy')
 
 
-def load_config(path):
+def load_config(path, loopback=False):
     config = json.loads(Path(path).read_text())
-    if not isinstance(config, dict) or set(config) != {'doca_binary', 'dut_pci', 'generator_interfaces', 'cpu'}:
-        raise ValueError('Config requires exactly doca_binary, dut_pci, generator_interfaces and cpu')
+    keys = {'doca_binary', 'dut_pci', 'cpu'} | (set() if loopback else {'generator_interfaces'})
+    if not isinstance(config, dict) or set(config) != keys:
+        raise ValueError('Config requires exactly '+', '.join(sorted(keys)))
     if any(not isinstance(config[k], list) or any(not isinstance(x, str) for x in config[k])
-           for k in ['dut_pci', 'generator_interfaces']):
+           for k in (['dut_pci'] if loopback else ['dut_pci', 'generator_interfaces'])):
         raise ValueError('Devices and interfaces must be string arrays')
     if type(config['cpu']) is not int or config['cpu'] not in os.sched_getaffinity(0):
         raise ValueError('DUT CPU must be available in the current CPU affinity mask')
@@ -100,10 +103,14 @@ def check_nic_deltas(before, after, reference):
 
 
 def execute(args, directory):
-    config = load_config(args.config)
-    states = admit_ports(config['dut_pci'], config['generator_interfaces'])
+    loopback = getattr(args, 'internal_loopback', False)
+    config = load_config(args.config, loopback)
+    states = admit_ports(config['dut_pci'], config.get('generator_interfaces'))
     macs = [bytes.fromhex(s['mac'].replace(':', '')) for s in states]
-    reference = load_reference(args.reference, macs[:2], macs[2:])
+    reference = loopback_reference(args.reference, macs) if loopback else load_reference(args.reference, macs[:2], macs[2:])
+    checksum_policy = getattr(args, 'checksum_policy', 'upstream')
+    if checksum_policy not in ('upstream', 'hardware'): raise ValueError('Unknown checksum policy')
+    peers = states if loopback else states[2:]
     (directory/'inventory.json').write_text(json.dumps(states, indent=2)+'\n')
     (directory/'reference-hashes.json').write_text(json.dumps(reference.digests, indent=2)+'\n')
     # Own the route file used by this run; avoid a later edit to the reference.
@@ -111,6 +118,10 @@ def execute(args, directory):
     for p in (0, 1):
         write_pcap(directory/f'input{p}.pcap', reference.inputs[p])
         write_pcap(directory/f'expected{p}.pcap', reference.expected[p])
+        if hasattr(reference, 'hardware_expected'):
+            write_pcap(directory/f'hardware-expected{p}.pcap', reference.hardware_expected[p])
+    (directory/'checksum-differences.json').write_text(json.dumps(
+        getattr(reference, 'checksum_differences', []), indent=2)+'\n')
     if args.preflight_only:
         return dict(status='PREFLIGHT', scope='read-only admission; no packet test', routes=reference.route_count)
     if not args.allow_physical_ports or os.geteuid() != 0:
@@ -118,38 +129,49 @@ def execute(args, directory):
     control = HostControl()
     ipv6_before = [control.read_ipv6(s) for s in states]
     route_before = ip_json('route', 'show', 'default')
-    result = dict(status='FAIL', scope='physical IPv4 functional test; no performance claim',
+    route6_before = ip_json('-6', 'route', 'show', 'default')
+    phy = PhyControl(directory) if loopback else None
+    result = dict(status='FAIL', scope=('internal PHY loopback' if loopback else 'external wire')+
+                  ' IPv4 functional test; no performance claim',
                   routes=reference.route_count, traffic_sent=False, restored=False)
+    result['checksum_policy'] = checksum_policy
+    result['expected_checksum_differences'] = len(getattr(reference, 'checksum_differences', []))
     command = [config['doca_binary'], '--lcores', f"0@{config['cpu']}", '-m', '128',
                '--in-memory', '--file-prefix', directory.name, '--no-telemetry', '--',
                '--backend', 'doca', '--routes', str(directory/'routes-v4.cfg'),
                '--device', config['dut_pci'][0], '--device', config['dut_pci'][1],
-               '--allow-physical-ports', '--eth-dest', '0,'+states[2]['mac'],
-               '--eth-dest', '1,'+states[3]['mac']]
+               '--allow-physical-ports', '--eth-dest', '0,'+peers[0]['mac'],
+               '--eth-dest', '1,'+peers[1]['mac']]
+    if loopback: command.append('--internal-loopback-test')
     (directory/'command.json').write_text(json.dumps(command, indent=2)+'\n')
     result['binary_sha256'] = hashlib.sha256(Path(config['doca_binary']).read_bytes()).hexdigest()
     actual, drops = {0: [], 1: []}, [0, 0]
     log = directory/'doca.log'
     try:
-        with isolated_ports(states, control):
+        with isolated_ports(states, control), (internal_phy(states, phy) if loopback else nullcontext()):
             sockets, process = [], None
             try:
-                for state in states[2:]: sockets.append(packet_socket(state['name']))
                 with log.open('w') as stream:
                     process = subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT,
                                                start_new_session=True)
                     ready = wait_ready(process, log, args.startup_timeout)
                     if ready.get('routes') != reference.route_count:
                         raise ValueError('DUT loaded a different route count')
-                    for state in states[2:]: control.set_up(state, True)
+                    if loopback and ready.get('internal_loopback_test') is not True:
+                        raise ValueError('DUT did not enable loopback capture guard')
+                    for state in peers: control.set_up(state, True)
                     wait_links(states, args.link_timeout, lambda: process.poll() is None)
+                    # Binding while DOWN leaves a pending ENETDOWN on AF_PACKET;
+                    # DUT startup can also cycle link state. Bind after setup and
+                    # before the first transmission, on both test topologies.
+                    for state in peers: sockets.append(packet_socket(state['name']))
                     before = nic_counters(states, directory, 'before')
                     result['traffic_sent'] = True  # Conservative: replay may fail after a partial send.
                     capture_replay(sockets, reference.inputs, args.pps, args.settle,
                                    lambda: process.poll() is None, actual)
                     drops = [packet_drops(s) for s in sockets]
                     after = nic_counters(states, directory, 'after')
-                    result['nic_deltas'] = check_nic_deltas(before, after, reference)
+                    result['nic_deltas'] = (check_loopback_deltas if loopback else check_nic_deltas)(before, after, reference)
             finally:
                 try:
                     if process is not None: result['exit_code'] = stop_process(process)
@@ -157,7 +179,13 @@ def execute(args, directory):
                     for sock in sockets: sock.close()
         text = log.read_text()
         events = read_events(text)
-        check_run(reference, actual, events, result['exit_code'], text, drops)
+        result['counters'] = events[-1] if events and events[-1].get('event') == 'stats' else None
+        try:
+            compare_frames(reference.expected, actual)
+            result['upstream_byte_equivalent'] = True
+        except AssertionError:
+            result['upstream_byte_equivalent'] = False
+        check_run(reference, actual, events, result['exit_code'], text, drops, checksum_policy)
         result.update(status='PASS', packets=sum(map(len, actual.values())), counters=events[1])
     except LinkUnavailable as error:
         result.update(status='BLOCKED', error=str(error))
@@ -172,6 +200,10 @@ def execute(args, directory):
                 if control.read_ipv6(state) != ipv6: raise RuntimeError('IPv6 setting was not restored')
             if ip_json('route', 'show', 'default') != route_before:
                 raise RuntimeError('Default management route changed')
+            if ip_json('-6', 'route', 'show', 'default') != route6_before:
+                raise RuntimeError('IPv6 default management route changed')
+            if loopback and any(phy.state(s)[0] != 0 for s in states):
+                raise RuntimeError('Internal PHY loopback was not disabled')
             result['restored'] = True
         except Exception as error:
             result.update(status='FAIL', restoration_error=str(error))
@@ -185,6 +217,9 @@ def main():
     parser.add_argument('--output', type=Path, required=True, help='private directory outside Git')
     parser.add_argument('--preflight-only', action='store_true')
     parser.add_argument('--allow-physical-ports', action='store_true')
+    parser.add_argument('--internal-loopback', action='store_true', help='explicit opt-in to temporary internal PHY loopback')
+    parser.add_argument('--checksum-policy', choices=('upstream', 'hardware'), default='upstream',
+                        help='upstream: exact bytes; hardware: canonical checksum only on hardware-forwarded packets')
     parser.add_argument('--pps', type=float, default=200, help='aggregate offered packets/s, 1..1000')
     parser.add_argument('--settle', type=float, default=3, help='post-send capture/counter settling seconds, >=3')
     parser.add_argument('--startup-timeout', type=float, default=45)

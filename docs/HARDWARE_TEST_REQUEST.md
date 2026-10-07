@@ -1,4 +1,4 @@
-# Hardware validation request for data-center operations
+# Optional external-wire validation request for data-center operations
 
 ## Purpose and timing
 
@@ -8,9 +8,12 @@ Final hardware acceptance requires packets to enter the NIC receive path, traver
 the installed DOCA rules and leave the expected physical port. Rule installation
 alone cannot prove forwarding behavior, and PCAP virtual ports bypass the NIC.
 
-This is a planned validation requirement, with no same-day cabling requirement.
-Software work and cable-free device admission can continue before the traffic
-path is available. Hardware acceptance remains incomplete until wire tests pass.
+This is an optional follow-up request, not a blocker for the implemented migration.
+Internal PHY loopback now exercises the actual hardware forwarding path without
+cables; see [the result and its checksum boundary](INTERNAL_LOOPBACK.md).
+External links are needed to validate optics/cables, a peer NIC and link behavior,
+and to make external throughput/latency claims. No same-day operations work is
+required for the current functional milestone.
 
 ## Minimum resource request
 
@@ -41,6 +44,6 @@ Start with low-rate correctness runs. Schedule rate sweeps only after they pass.
 Record port state before testing and verify restoration afterward. Keep lab
 identities, real addresses, topology and raw logs/captures outside GitHub.
 
-The resulting evidence supports a hardware-validated migration claim. Until then,
-the defensible result is a built application with verified software behavior and
-explicitly unverified hardware forwarding and performance.
+The resulting evidence would extend the existing internal PHY result to external
+wire interoperability. It would not erase the documented upstream checksum
+differences. Performance remains a separate, controlled measurement.

@@ -11,12 +11,13 @@
 
 struct completion { unsigned submitted, completed; bool failed; };
 struct l3_flow {
-    bool initialized;
+    bool initialized, internal_loopback;
     const volatile sig_atomic_t *cancelled;
     uint16_t queue;
     struct doca_flow_port *ports[L3_PORTS];
     struct doca_flow_pipe *exceptions[L3_PORTS];
     struct doca_flow_pipe *rewrites[L3_PORTS], *lpm[L3_PORTS], *roots[L3_PORTS];
+    struct doca_flow_pipe *captures[L3_PORTS], *capture_sinks[L3_PORTS];
     struct doca_flow_pipe_entry *rewrite[L3_PORTS];
     struct completion completion[L3_PORTS];
 };
@@ -243,7 +244,7 @@ static doca_error_t root_pipe(struct l3_flow *flow, unsigned p, struct doca_flow
     TRY(doca_flow_pipe_cfg_create(&cfg, flow->ports[p]));
     TRY(doca_flow_pipe_cfg_set_name(cfg, "IPV4_ADMISSION"));
     TRY(doca_flow_pipe_cfg_set_type(cfg, DOCA_FLOW_PIPE_BASIC));
-    TRY(doca_flow_pipe_cfg_set_is_root(cfg, true));
+    TRY(doca_flow_pipe_cfg_set_is_root(cfg, !flow->internal_loopback));
     TRY(doca_flow_pipe_cfg_set_nr_entries(cfg, 254));
     TRY(doca_flow_pipe_cfg_set_match(cfg, &match, &mask));
     TRY(doca_flow_pipe_create(cfg, &fwd, &miss, pipe));
@@ -259,14 +260,56 @@ out:
     return err;
 }
 
+/* Test only: packets rewritten by this port have its source MAC. On return
+ * through internal PHY loopback they must terminate in the kernel, rather than
+ * re-entering the router. Test input source MACs must differ from both DUT MACs. */
+static doca_error_t capture_pipe(struct l3_flow *flow, unsigned p, const struct l3_macs *macs)
+{
+    struct doca_flow_pipe_cfg *cfg = NULL;
+    struct doca_flow_match match = {0}, mask = {0};
+    struct doca_flow_fwd fwd = {.type = DOCA_FLOW_FWD_TARGET};
+    struct doca_flow_fwd miss = {.type = DOCA_FLOW_FWD_PIPE, .next_pipe = flow->roots[p]};
+    struct doca_flow_pipe_entry *entry;
+    doca_error_t err;
+    TRY(doca_flow_get_target(DOCA_FLOW_TARGET_KERNEL, &fwd.target));
+    TRY(doca_flow_pipe_cfg_create(&cfg, flow->ports[p]));
+    /* DOCA 3.3 prohibits a kernel target directly on a root pipe. */
+    TRY(doca_flow_pipe_cfg_set_name(cfg, "INTERNAL_LOOPBACK_KERNEL"));
+    TRY(doca_flow_pipe_cfg_set_type(cfg, DOCA_FLOW_PIPE_BASIC));
+    TRY(doca_flow_pipe_cfg_set_is_root(cfg, false));
+    TRY(doca_flow_pipe_cfg_set_nr_entries(cfg, 1));
+    TRY(doca_flow_pipe_cfg_set_match(cfg, &match, NULL));
+    TRY(doca_flow_pipe_create(cfg, &fwd, NULL, &flow->capture_sinks[p]));
+    TRY(finish_entry(flow, p, doca_flow_pipe_basic_add_entry(0, flow->capture_sinks[p], &match,
+        0, NULL, NULL, NULL, DOCA_FLOW_ENTRY_FLAGS_NO_WAIT, &flow->completion[p], &entry)));
+    doca_flow_pipe_cfg_destroy(cfg);
+    cfg = NULL;
+    memcpy(match.outer.eth.src_mac, macs->src[p], 6);
+    memset(mask.outer.eth.src_mac, UINT8_MAX, 6);
+    fwd = (struct doca_flow_fwd){.type = DOCA_FLOW_FWD_PIPE, .next_pipe = flow->capture_sinks[p]};
+    TRY(doca_flow_pipe_cfg_create(&cfg, flow->ports[p]));
+    TRY(doca_flow_pipe_cfg_set_name(cfg, "INTERNAL_LOOPBACK_CAPTURE"));
+    TRY(doca_flow_pipe_cfg_set_type(cfg, DOCA_FLOW_PIPE_BASIC));
+    TRY(doca_flow_pipe_cfg_set_is_root(cfg, true));
+    TRY(doca_flow_pipe_cfg_set_nr_entries(cfg, 1));
+    TRY(doca_flow_pipe_cfg_set_match(cfg, &match, &mask));
+    TRY(doca_flow_pipe_create(cfg, &fwd, &miss, &flow->captures[p]));
+    TRY(finish_entry(flow, p, doca_flow_pipe_basic_add_entry(0, flow->captures[p], &match,
+        0, NULL, NULL, NULL, DOCA_FLOW_ENTRY_FLAGS_NO_WAIT, &flow->completion[p], &entry)));
+out:
+    if (cfg) doca_flow_pipe_cfg_destroy(cfg);
+    return err;
+}
+
 int l3_flow_start(struct l3_flow **output, const struct l3_routes *routes,
                   const struct l3_macs *macs, struct doca_dev *devices[L3_PORTS],
-                  const volatile sig_atomic_t *cancelled)
+                  const volatile sig_atomic_t *cancelled, bool internal_loopback)
 {
     struct l3_flow *flow = calloc(1, sizeof(*flow));
     if (!flow) return -1;
     *output = flow; /* Caller owns cleanup on both success and partial failure. */
     flow->cancelled = cancelled;
+    flow->internal_loopback = internal_loopback;
     doca_error_t err;
     TRY(initialize(flow));
     for (unsigned p = 0; p < L3_PORTS; ++p) TRY(start_port(flow, p, devices[p], routes->count));
@@ -277,6 +320,7 @@ int l3_flow_start(struct l3_flow **output, const struct l3_routes *routes,
         TRY(rewrite_pipe(flow, p, macs, &flow->rewrites[p]));
         TRY(route_pipe(flow, p, routes, flow->rewrites[p], &flow->lpm[p]));
         TRY(root_pipe(flow, p, flow->lpm[p], &flow->roots[p]));
+        if (internal_loopback) TRY(capture_pipe(flow, p, macs));
     }
     return 0;
 out:
@@ -304,6 +348,8 @@ int l3_flow_stop(struct l3_flow *flow)
     /* Release incoming references before their destination pipes. Handles are
      * retained from creation, including when a later entry submission fails. */
     for (unsigned p = L3_PORTS; p-- > 0;) {
+        if (flow->captures[p]) doca_flow_pipe_destroy(flow->captures[p]);
+        if (flow->capture_sinks[p]) doca_flow_pipe_destroy(flow->capture_sinks[p]);
         if (flow->roots[p]) doca_flow_pipe_destroy(flow->roots[p]);
         if (flow->lpm[p]) doca_flow_pipe_destroy(flow->lpm[p]);
         if (flow->rewrites[p]) doca_flow_pipe_destroy(flow->rewrites[p]);

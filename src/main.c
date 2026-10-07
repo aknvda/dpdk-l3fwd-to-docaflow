@@ -35,6 +35,7 @@ static void usage(void)
          "  --check-config               validate configuration without EAL/device access\n"
          "  --device DOMAIN:BUS:SLOT.FUNC two explicit PCI functions, DOCA mode only\n"
          "  --allow-physical-ports       opt in to using already isolated test interfaces\n"
+         "  --internal-loopback-test     capture returned local-source frames in the kernel\n"
          "Physical EAL allow/block options are prohibited; the app controls probing.\n"
          "Software mode uses only net_pcap virtual ports and never probes physical NICs.");
 }
@@ -89,7 +90,7 @@ int main(int argc, char **argv)
 {
     const char *backend = NULL, *route_file = NULL, *pci[2] = {NULL, NULL};
     unsigned devices_count = 0;
-    bool check = false, physical_opt_in = false;
+    bool check = false, physical_opt_in = false, internal_loopback = false;
     double duration = 0;
     struct l3_macs macs = {0};
     for (unsigned p = 0; p < L3_PORTS; ++p) { macs.dst[p][0] = 2; macs.dst[p][5] = p; }
@@ -101,6 +102,7 @@ int main(int argc, char **argv)
         if (!strcmp(key, "--help") || !strcmp(key, "-h")) { usage(); return 0; }
         if (!strcmp(key, "--check-config")) { check = true; continue; }
         if (!strcmp(key, "--allow-physical-ports")) { physical_opt_in = true; continue; }
+        if (!strcmp(key, "--internal-loopback-test")) { internal_loopback = true; continue; }
         if (++i == argc) { fprintf(stderr, "Missing value for %s\n", key); return 2; }
         const char *value = argv[i];
         if (!strcmp(key, "--backend")) backend = value;
@@ -121,6 +123,9 @@ int main(int argc, char **argv)
         fputs("Specify --backend software|doca and --routes FILE\n", stderr); return 2;
     }
     bool hardware = !strcmp(backend, "doca");
+    if (internal_loopback && (!hardware || !physical_opt_in)) {
+        fputs("--internal-loopback-test requires doca and --allow-physical-ports\n", stderr); return 2;
+    }
     if (hardware && (devices_count != 2 || !strcmp(pci[0], pci[1]) || strncmp(pci[0], pci[1], 10))) {
         fputs("DOCA requires two distinct PCI functions on one isolated adapter\n", stderr); return 2;
     }
@@ -185,10 +190,12 @@ int main(int argc, char **argv)
         if (configure_port(p, pool, hardware, &macs)) { fputs("Port configuration failed\n", stderr); goto cleanup; }
         started[p] = true;
     }
-    if (hardware && l3_flow_start(&flow, &routes, &macs, devices, &stop_requested)) goto cleanup;
+    if (hardware && l3_flow_start(&flow, &routes, &macs, devices, &stop_requested, internal_loopback)) goto cleanup;
     if (stop_requested) goto cleanup;
     uint64_t received[2] = {0}, transmitted[2] = {0}, dropped = 0, tx_dropped = 0;
-    printf("{\"event\":\"ready\",\"backend\":\"%s\",\"routes\":%zu,\"dpdk\":\"%s\"}\n", backend, routes.count, rte_version());
+    printf("{\"event\":\"ready\",\"backend\":\"%s\",\"routes\":%zu,\"dpdk\":\"%s\","
+           "\"internal_loopback_test\":%s}\n", backend, routes.count, rte_version(),
+           internal_loopback ? "true" : "false");
     fflush(stdout);
     double begin = seconds();
     while (!stop_requested && (!duration || seconds()-begin < duration)) {

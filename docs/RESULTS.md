@@ -3,6 +3,48 @@
 Updated 2026-10-07. Sanitized report: host identifiers, network addresses, device serials
 and raw inventories are intentionally kept outside the repository.
 
+## Internal PHY end-to-end result
+
+Two consecutive cable-free runs passed the full **1024-route / 2326-packet**
+corpus under the explicit `hardware` checksum contract, on ConnectX-6 Dx firmware
+22.48.1000 with DOCA 3.3.0109 and packaged DPDK. **Exact upstream byte parity
+fails:** ten offloaded checksum boundary cases differ, as detailed below. No
+packet was omitted, and the strict test remains the default.
+
+| Measurement, each run | Result |
+| --- | --- |
+| Captured egress frames | 1140 on port 0, 1186 on port 1; all full bytes match the selected contract |
+| Hardware-forwarded packets by ingress | 557 / 542 (1099 total) |
+| Software Rx by ingress | 606 / 621 |
+| Software Tx by egress | 598 / 629 (1227 total) |
+| Software drops / unsent Tx / capture drops | All zero |
+| Physical Rx and Tx on port 0 | 2303 each: 1163 injected inputs + 1140 returned outputs |
+| Physical Rx and Tx on port 1 | 2349 each: 1163 injected inputs + 1186 returned outputs |
+| Twelve NIC error/discard counter deltas | All zero on both ports |
+| Shutdown and restart | Both exits 0; no SDK errors; PHY loopback disabled and interface settings/default routes restored |
+| Regression tests | 37 Python tests against each Linux executable, no skips; 6 DOCA and 4 software C suites pass |
+
+The strict run delivered every packet with the expected hardware/software counts,
+but failed byte comparison: four checksum differences on egress 0 and six on
+egress 1. Five cases transform input `feff` into hardware `0000` versus upstream
+`ffff`; both outputs are valid one's-complement encodings. Five cases transform
+valid input `ffff` into hardware `0100` versus upstream `0000`; the upstream
+output checksum is invalid after the TTL change.
+
+The separate `hardware` contract independently calculates canonical checksums
+only for offloaded packets, before replay, and requires exact equality for all
+other bytes and all software-path packets. Results explicitly record
+`upstream_byte_equivalent: false`. This confirms actual hardware forwarding with
+a documented compatibility difference; it does not establish exact equivalence
+or authorize silently replacing the strict contract in downstream acceptance.
+See [INTERNAL_LOOPBACK.md](INTERNAL_LOOPBACK.md) for reproducible commands.
+
+The test hook uses two additional pipes per port to terminate returned frames in
+the kernel. External cables, optics, peer interoperability, line rate, latency
+and Vera/Substrate benefits remain unmeasured.
+
+## Earlier baseline and control-plane evidence
+
 Implementation source: `b01012e` (IPv4 backends and tests). The expanded packet
 runs preceded the final strict MAC-argument validation change; both builds and
 all CLI tests were rerun afterward, followed by a passing 48-packet software
@@ -45,7 +87,7 @@ to match the tested checkout (`c685d0b`, which adds documentation to `95e5052`).
 | Linux packet-socket integration | HARNESS_PASS on final runner: real AF_PACKET/veth checks in a temporary network namespace; ordinary delivery, delayed duplicate rejection and wrong-port rejection; no DOCA emulation |
 | Required physical counter availability | PASS: both packet counters and all twelve error/discard counters available on each of four reserved ports |
 | Physical runner with absent links | BLOCKED on final runner: 1024-route DOCA ready, no carrier, no traffic sent, DUT exit 0 with no SDK errors and all four reserved interfaces/settings restored |
-| Hardware forwarding / throughput / latency | Not tested; no performance claim |
+| Hardware forwarding / throughput / latency | Hardware forwarding now covered by internal PHY result above; throughput and latency remain unmeasured |
 
 ## Reproducing the passing baseline
 

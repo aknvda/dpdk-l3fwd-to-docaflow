@@ -55,14 +55,23 @@ class LifecycleTests(unittest.TestCase):
                 config = dict(doca_binary=sys.executable, cpu=0, generator_interfaces=['port2', 'port3'],
                               dut_pci=['0000:01:00.0', '0000:01:00.1'])
                 sockets = [Mock(), Mock()]
+                socket_count = 0
+
+                def open_socket(_name):
+                    nonlocal socket_count
+                    self.assertIn('linked', order, 'Bind after link setup to avoid stale ENETDOWN')
+                    sock = sockets[socket_count]
+                    socket_count += 1
+                    return sock
                 replacements = dict(load_config=Mock(return_value=config),
                                     admit_ports=Mock(return_value=states),
                                     load_reference=Mock(return_value=reference),
                                     HostControl=Mock(return_value=control),
                                     ip_json=Mock(return_value=[]),
-                                    packet_socket=Mock(side_effect=sockets),
+                                    packet_socket=Mock(side_effect=open_socket),
                                     wait_ready=Mock(return_value={'routes': 5}),
-                                    wait_links=Mock(), packet_drops=Mock(return_value=0),
+                                    wait_links=Mock(side_effect=lambda *_: order.append('linked')),
+                                    packet_drops=Mock(return_value=0),
                                     capture_replay=Mock(), nic_counters=Mock(return_value=[]),
                                     check_nic_deltas=Mock(return_value=[]))
                 with ExitStack() as stack:
@@ -75,7 +84,7 @@ class LifecycleTests(unittest.TestCase):
                     stack.enter_context(patch('wire_smoke.subprocess.Popen', return_value=process))
                     result = execute(args, directory)
                 self.assertTrue(process.exited, 'DUT must exit before restoring interfaces')
-                self.assertEqual(order[0], 'reaped')
+                self.assertLess(order.index('reaped'), order.index('restore'))
                 self.assertEqual(result['status'], 'FAIL')
                 self.assertTrue(result['restored'])
                 self.assertFalse(any(control.up.values()))

@@ -2,8 +2,10 @@
 
 Status: the application builds against DOCA 3.3 and has passed software packet
 comparison through 1024 routes. Physical rule installation, teardown and restart
-now pass through 1024 routes after firmware maintenance. Wire packet equivalence
-and performance remain open. The [physical runner](WIRE_VALIDATION.md) is
+now pass through 1024 routes after firmware maintenance. Internal PHY hardware
+forwarding passes through 1024 routes under the explicit hardware checksum
+contract; strict upstream byte parity fails on ten checksum cases. External wire
+testing and performance remain open. The [physical runner](WIRE_VALIDATION.md) is
 implemented and has passed Linux packet-socket and no-link cleanup tests. See
 [RESULTS.md](RESULTS.md) for measured results.
 
@@ -15,9 +17,10 @@ Traffic generator port B <----> DUT port 1
 Management/SSH uses separate interfaces.
 ```
 
-This connectivity is required for hardware packet acceptance. Software development
-and offline packet comparison can continue without it; cable-free startup can
-check device admission and rule insertion. Functional tests can use any common
+This connectivity is needed for the external-wire fixture, not for all hardware
+packet validation. The [internal PHY fixture](INTERNAL_LOOPBACK.md) exercises real
+hardware forwarding without cables on the validated adapter. External paths are
+still needed for link interoperability and performance claims. Functional tests can use any common
 supported link speed. A 100GbE link is required only for a 100GbE performance claim.
 Existing isolated switch paths or another reserved wired DUT/generator pair are
 valid alternatives to new direct cables. See the
@@ -62,7 +65,7 @@ The extended software test adds TTL/checksum boundaries and route-table scaling
 through the pinned upstream limit: `--extended --route-count 1024`. This is
 functional route coverage, not a hardware-capacity or throughput measurement.
 
-## Gate 1: device and SDK admission (control plane passed; traffic checks pending)
+## Gate 1: device and SDK admission (control plane and internal PHY traffic passed)
 
 1. Save the read-only inventory and map PCI addresses, port IDs, physical links,
    PF/VF/SF/representors, NUMA nodes and application CPU affinity.
