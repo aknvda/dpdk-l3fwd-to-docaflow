@@ -7,12 +7,17 @@
 
 #define L3_MAX_ROUTES 1024
 #define L3_PORTS 2
+/* Host-order value carried by DOCA pkt_meta to the application's Rx queue. */
+#define L3_ROUTE_META UINT32_C(0x4c330000)
 struct l3_route { uint32_t network; uint8_t depth; uint16_t port; };
 struct l3_routes { size_t count; struct l3_route entries[L3_MAX_ROUTES]; };
 struct l3_macs { uint8_t src[L3_PORTS][6]; uint8_t dst[L3_PORTS][6]; };
 enum l3_result { L3_FORWARDED, L3_UNSUPPORTED, L3_MALFORMED };
 int l3_routes_read(FILE *input, struct l3_routes *routes, char *error, size_t size);
 uint16_t l3_lookup(const struct l3_routes *routes, uint32_t ip, uint16_t ingress);
+int l3_route_metadata_decode(uint32_t metadata);
+enum l3_result l3_forward_selected(uint8_t *frame, size_t length, uint16_t egress,
+                                   const struct l3_macs *macs);
 enum l3_result l3_forward(uint8_t *frame, size_t length, uint16_t ingress,
                           const struct l3_routes *routes, const struct l3_macs *macs,
                           uint16_t *egress);

@@ -1,13 +1,14 @@
 # Validation requirements and acceptance gates
 
-Status: the application builds against DOCA 3.3 and has passed software packet
-comparison through 1024 routes. Physical rule installation, teardown and restart
-now pass through 1024 routes after firmware maintenance. Internal PHY hardware
-forwarding passes through 1024 routes under the explicit hardware checksum
-contract; strict upstream byte parity fails on ten checksum cases. External wire
-testing and performance remain open. The [physical runner](WIRE_VALIDATION.md) is
-implemented and has passed Linux packet-socket and no-link cleanup tests. See
-[RESULTS.md](RESULTS.md) for measured results.
+Status: the IPv4 migration builds against DOCA 3.3 and passes the full
+1024-route / 2326-packet upstream corpus in software and on real hardware using
+internal PHY loopback. The default policy uses hardware route metadata plus
+software rewriting for exact upstream bytes; full hardware forwarding is an
+explicit policy with ten documented checksum differences. Installation, teardown,
+restart, counters and restoration are validated. External-wire interoperability,
+performance and broader protocol/exception coverage remain separate experiments.
+See [RESULTS.md](RESULTS.md) for measured results and the
+[internal PHY runner](INTERNAL_LOOPBACK.md) for the passing end-to-end procedure.
 
 ## Minimum physical lab
 

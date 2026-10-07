@@ -66,6 +66,21 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn('EAL:', result.stderr)
 
+    def test_checksum_policy_is_explicit_and_defaults_to_upstream(self):
+        base = ['--check-config', '--routes', str(ROOT/'configs/routes-v4.cfg'), '--backend', 'doca',
+                '--device', '0000:00:01.0', '--device', '0000:00:01.1']
+        for extra, policy in [([], 'upstream'), (['--checksum-policy', 'upstream'], 'upstream'),
+                              (['--checksum-policy', 'hardware'], 'hardware')]:
+            result = self.run_app(*(base+extra))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('"checksum_policy":"'+policy+'"', result.stdout)
+            self.assertNotIn('EAL:', result.stderr)
+        result = self.run_app(*(base+['--checksum-policy', 'ignore']))
+        self.assertNotEqual(result.returncode, 0)
+        result = self.run_app('--check-config', '--routes', str(ROOT/'configs/routes-v4.cfg'),
+                              '--backend', 'software', '--checksum-policy', 'hardware')
+        self.assertNotEqual(result.returncode, 0)
+
 
 if __name__ == '__main__':
     unittest.main()

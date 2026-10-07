@@ -76,22 +76,31 @@ uint16_t l3_lookup(const struct l3_routes *routes, uint32_t ip, uint16_t ingress
     return port;
 }
 
-enum l3_result l3_forward(uint8_t *frame, size_t length, uint16_t ingress,
-                          const struct l3_routes *routes, const struct l3_macs *macs,
-                          uint16_t *egress)
+static enum l3_result validate_frame(const uint8_t *frame, size_t length)
 {
-    if (ingress >= L3_PORTS || length < 14) return L3_MALFORMED;
+    if (length < 14) return L3_MALFORMED;
     if (frame[12] != 8 || frame[13] != 0) return L3_UNSUPPORTED;
     if (length < 34) return L3_MALFORMED;
-    uint8_t *ip = frame + 14;
+    const uint8_t *ip = frame + 14;
     size_t ihl = (ip[0] & 15u) * 4u;
     size_t total = ((size_t)ip[2] << 8) | ip[3];
     if ((ip[0] >> 4) != 4 || ihl < 20 || length-14 < ihl ||
         total < ihl || total > length-14) return L3_MALFORMED;
-    uint32_t destination;
-    memcpy(&destination, ip+16, sizeof(destination));
-    *egress = l3_lookup(routes, ntohl(destination), ingress);
-    if (*egress >= L3_PORTS) return L3_MALFORMED;
+    return L3_FORWARDED;
+}
+
+int l3_route_metadata_decode(uint32_t metadata)
+{
+    return (metadata & ~UINT32_C(1)) == L3_ROUTE_META ? (int)(metadata & 1) : -1;
+}
+
+enum l3_result l3_forward_selected(uint8_t *frame, size_t length, uint16_t egress,
+                                   const struct l3_macs *macs)
+{
+    if (egress >= L3_PORTS) return L3_MALFORMED;
+    enum l3_result valid = validate_frame(frame, length);
+    if (valid != L3_FORWARDED) return valid;
+    uint8_t *ip = frame + 14;
     --ip[8];
     /* Preserve the pinned upstream sample's native-endian increment, including
      * its edge cases. This is not a general RFC router checksum implementation. */
@@ -99,7 +108,20 @@ enum l3_result l3_forward(uint8_t *frame, size_t length, uint16_t ingress,
     memcpy(&raw_checksum, ip+10, sizeof(raw_checksum));
     ++raw_checksum;
     memcpy(ip+10, &raw_checksum, sizeof(raw_checksum));
-    memcpy(frame, macs->dst[*egress], 6);
-    memcpy(frame+6, macs->src[*egress], 6);
+    memcpy(frame, macs->dst[egress], 6);
+    memcpy(frame+6, macs->src[egress], 6);
     return L3_FORWARDED;
+}
+
+enum l3_result l3_forward(uint8_t *frame, size_t length, uint16_t ingress,
+                          const struct l3_routes *routes, const struct l3_macs *macs,
+                          uint16_t *egress)
+{
+    if (ingress >= L3_PORTS) return L3_MALFORMED;
+    enum l3_result valid = validate_frame(frame, length);
+    if (valid != L3_FORWARDED) return valid;
+    uint32_t destination;
+    memcpy(&destination, frame+30, sizeof(destination));
+    *egress = l3_lookup(routes, ntohl(destination), ingress);
+    return l3_forward_selected(frame, length, *egress, macs);
 }

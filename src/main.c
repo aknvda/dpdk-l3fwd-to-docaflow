@@ -15,6 +15,7 @@
 #include <time.h>
 #include <rte_eal.h>
 #include <rte_ethdev.h>
+#include <rte_flow.h>
 #include <rte_mbuf.h>
 #include <rte_version.h>
 
@@ -36,6 +37,7 @@ static void usage(void)
          "  --device DOMAIN:BUS:SLOT.FUNC two explicit PCI functions, DOCA mode only\n"
          "  --allow-physical-ports       opt in to using already isolated test interfaces\n"
          "  --internal-loopback-test     capture returned local-source frames in the kernel\n"
+         "  --checksum-policy upstream|hardware  default upstream; hardware permits checksum differences\n"
          "Physical EAL allow/block options are prohibited; the app controls probing.\n"
          "Software mode uses only net_pcap virtual ports and never probes physical NICs.");
 }
@@ -89,6 +91,7 @@ static int configure_port(uint16_t port, struct rte_mempool *pool, bool hardware
 int main(int argc, char **argv)
 {
     const char *backend = NULL, *route_file = NULL, *pci[2] = {NULL, NULL};
+    const char *checksum_policy = "upstream";
     unsigned devices_count = 0;
     bool check = false, physical_opt_in = false, internal_loopback = false;
     double duration = 0;
@@ -107,6 +110,12 @@ int main(int argc, char **argv)
         const char *value = argv[i];
         if (!strcmp(key, "--backend")) backend = value;
         else if (!strcmp(key, "--routes")) route_file = value;
+        else if (!strcmp(key, "--checksum-policy")) {
+            if (strcmp(value, "upstream") && strcmp(value, "hardware")) {
+                fputs("Invalid --checksum-policy\n", stderr); return 2;
+            }
+            checksum_policy = value;
+        }
         else if (!strcmp(key, "--device")) {
             if (devices_count == 2 || !l3_pci_valid(value)) { fputs("Invalid PCI device\n", stderr); return 2; }
             pci[devices_count++] = value;
@@ -123,6 +132,10 @@ int main(int argc, char **argv)
         fputs("Specify --backend software|doca and --routes FILE\n", stderr); return 2;
     }
     bool hardware = !strcmp(backend, "doca");
+    bool strict_checksum = !strcmp(checksum_policy, "upstream");
+    if (!hardware && !strict_checksum) {
+        fputs("hardware checksum policy requires the doca backend\n", stderr); return 2;
+    }
     if (internal_loopback && (!hardware || !physical_opt_in)) {
         fputs("--internal-loopback-test requires doca and --allow-physical-ports\n", stderr); return 2;
     }
@@ -143,7 +156,8 @@ int main(int argc, char **argv)
     int loaded = l3_routes_read(input, &routes, error, sizeof(error));
     fclose(input);
     if (loaded) { fprintf(stderr, "Invalid routes: %s\n", error); return 2; }
-    if (check) { printf("{\"backend\":\"%s\",\"routes\":%zu,\"device_access\":false}\n", backend, routes.count); return 0; }
+    if (check) { printf("{\"backend\":\"%s\",\"routes\":%zu,\"checksum_policy\":\"%s\",\"device_access\":false}\n",
+                       backend, routes.count, checksum_policy); return 0; }
 #ifndef L3_HAVE_DOCA
     if (hardware) { fputs("DOCA backend not built; configure with -Ddoca=enabled\n", stderr); return 2; }
 #endif
@@ -185,17 +199,24 @@ int main(int argc, char **argv)
     pool = rte_pktmbuf_pool_create("l3fwd_pool", 16383, 128, 0,
                                   RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
     if (!pool) { fputs("Cannot allocate mbuf pool\n", stderr); goto cleanup; }
+#ifdef L3_HAVE_DOCA
+    if (hardware && strict_checksum && rte_flow_dynf_metadata_register() < 0) {
+        fputs("Cannot register hardware route metadata\n", stderr); goto cleanup;
+    }
+#endif
     for (uint16_t p = 0; p < L3_PORTS; ++p) {
         if (stop_requested) goto cleanup;
         if (configure_port(p, pool, hardware, &macs)) { fputs("Port configuration failed\n", stderr); goto cleanup; }
         started[p] = true;
     }
-    if (hardware && l3_flow_start(&flow, &routes, &macs, devices, &stop_requested, internal_loopback)) goto cleanup;
+    if (hardware && l3_flow_start(&flow, &routes, &macs, devices, &stop_requested,
+                                   internal_loopback, strict_checksum)) goto cleanup;
     if (stop_requested) goto cleanup;
     uint64_t received[2] = {0}, transmitted[2] = {0}, dropped = 0, tx_dropped = 0;
+    uint64_t lookup_received[2] = {0};
     printf("{\"event\":\"ready\",\"backend\":\"%s\",\"routes\":%zu,\"dpdk\":\"%s\","
-           "\"internal_loopback_test\":%s}\n", backend, routes.count, rte_version(),
-           internal_loopback ? "true" : "false");
+           "\"internal_loopback_test\":%s,\"checksum_policy\":\"%s\"}\n", backend, routes.count, rte_version(),
+           internal_loopback ? "true" : "false", checksum_policy);
     fflush(stdout);
     double begin = seconds();
     while (!stop_requested && (!duration || seconds()-begin < duration)) {
@@ -205,10 +226,26 @@ int main(int argc, char **argv)
             uint16_t count = rte_eth_rx_burst(p, 0, packets, 32);
             received[p] += count;
             for (uint16_t i = 0; i < count; ++i) {
-                uint16_t egress;
-                if (rte_pktmbuf_linearize(packets[i]) ||
-                    l3_forward(rte_pktmbuf_mtod(packets[i], uint8_t *),
-                               rte_pktmbuf_pkt_len(packets[i]), p, &routes, &macs, &egress) != L3_FORWARDED) {
+                uint16_t egress = p;
+                int selected = -1;
+#ifdef L3_HAVE_DOCA
+                if (hardware && strict_checksum && rte_flow_dynf_metadata_avail() &&
+                    (packets[i]->ol_flags & RTE_MBUF_DYNFLAG_RX_METADATA)) {
+                    selected = l3_route_metadata_decode(*RTE_FLOW_DYNF_METADATA(packets[i]));
+                    packets[i]->ol_flags &= ~RTE_MBUF_DYNFLAG_TX_METADATA;
+                }
+#endif
+                enum l3_result forwarded = L3_MALFORMED;
+                if (!rte_pktmbuf_linearize(packets[i])) {
+                    uint8_t *frame = rte_pktmbuf_mtod(packets[i], uint8_t *);
+                    size_t length = rte_pktmbuf_pkt_len(packets[i]);
+                    if (selected >= 0) {
+                        egress = (uint16_t)selected;
+                        ++lookup_received[p];
+                        forwarded = l3_forward_selected(frame, length, egress, &macs);
+                    } else forwarded = l3_forward(frame, length, p, &routes, &macs, &egress);
+                }
+                if (forwarded != L3_FORWARDED) {
                     rte_pktmbuf_free(packets[i]); ++dropped; continue;
                 }
                 tx[egress][pending[egress]++] = packets[i];
@@ -220,13 +257,15 @@ int main(int argc, char **argv)
             }
         }
     }
-    uint64_t hardware_forwarded[2] = {0};
-    if (hardware && l3_flow_counters(flow, hardware_forwarded)) goto cleanup;
+    uint64_t hardware_forwarded[2] = {0}, hardware_lookups[2] = {0};
+    if (hardware && l3_flow_counters(flow, hardware_forwarded, hardware_lookups)) goto cleanup;
     printf("{\"event\":\"stats\",\"software_rx\":[%" PRIu64 ",%" PRIu64 "],"
            "\"software_tx\":[%" PRIu64 ",%" PRIu64 "],\"software_dropped\":%" PRIu64 ","
-           "\"tx_dropped\":%" PRIu64 ",\"hardware_forwarded\":[%" PRIu64 ",%" PRIu64 "]}\n",
+           "\"tx_dropped\":%" PRIu64 ",\"hardware_forwarded\":[%" PRIu64 ",%" PRIu64 "],"
+           "\"hardware_lookups\":[%" PRIu64 ",%" PRIu64 "],\"software_hw_lookup\":[%" PRIu64 ",%" PRIu64 "]}\n",
            received[0], received[1], transmitted[0], transmitted[1], dropped, tx_dropped,
-           hardware_forwarded[0], hardware_forwarded[1]);
+           hardware_forwarded[0], hardware_forwarded[1], hardware_lookups[0], hardware_lookups[1],
+           lookup_received[0], lookup_received[1]);
     result = 0;
 cleanup:
     if (l3_flow_stop(flow)) result = 1;

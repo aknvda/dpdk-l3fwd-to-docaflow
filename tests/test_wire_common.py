@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from pcap_smoke import generate, read_pcap, write_pcap
-from wire_common import load_reference, check_run, wait_ready, stop_process
+from wire_common import load_reference, check_run, wait_ready, stop_process, expected_stats
 
 DUT = [bytes.fromhex('020000000020'), bytes.fromhex('020000000021')]
 PEER = [bytes.fromhex('020000000030'), bytes.fromhex('020000000031')]
@@ -61,9 +61,14 @@ class ReferenceTests(unittest.TestCase):
 
     def test_counter_and_capture_failures_cannot_pass(self):
         ref = load_reference(self.path, DUT, PEER)
-        events = [dict(event='ready', backend='doca', routes=5), dict(event='stats', **ref.stats)]
+        stats = expected_stats(ref, 'upstream')
+        self.assertEqual(stats, dict(software_rx=[144, 144], software_tx=[120, 168],
+                                     software_dropped=0, tx_dropped=0, hardware_forwarded=[0, 0],
+                                     hardware_lookups=[48, 32], software_hw_lookup=[48, 32]))
+        events = [dict(event='ready', backend='doca', routes=5, checksum_policy='upstream'),
+                  dict(event='stats', **stats)]
         check_run(ref, ref.expected, events, 0, '', [0, 0])
-        for key in ref.stats:
+        for key in stats:
             wrong = json.loads(json.dumps(events))
             if isinstance(wrong[1][key], list):
                 wrong[1][key][0] += 1
@@ -86,9 +91,12 @@ class ReferenceTests(unittest.TestCase):
     def test_hardware_checksum_contract_is_explicit_and_narrow(self):
         ref = load_reference(self.path, DUT, PEER)
         self.assertEqual(len(ref.checksum_differences), 10)
-        events = [dict(event='ready', backend='doca', routes=5), dict(event='stats', **ref.stats)]
+        events = [dict(event='ready', backend='doca', routes=5, checksum_policy='upstream'),
+                  dict(event='stats', **expected_stats(ref, 'upstream'))]
         with self.assertRaises(AssertionError):
             check_run(ref, ref.hardware_expected, events, 0, '', [0, 0])
+        events = [dict(event='ready', backend='doca', routes=5, checksum_policy='hardware'),
+                  dict(event='stats', **expected_stats(ref, 'hardware'))]
         check_run(ref, ref.hardware_expected, events, 0, '', [0, 0], checksum_policy='hardware')
         for offset in [22, 24, 26, 42]:
             corrupt = {p: list(frames) for p, frames in ref.hardware_expected.items()}
@@ -97,6 +105,15 @@ class ReferenceTests(unittest.TestCase):
                 check_run(ref, corrupt, events, 0, '', [0, 0], checksum_policy='hardware')
         with self.assertRaises(ValueError):
             check_run(ref, ref.expected, events, 0, '', [0, 0], checksum_policy='ignore')
+
+    def test_wrong_policy_or_missing_hardware_metadata_cannot_pass(self):
+        ref = load_reference(self.path, DUT, PEER)
+        events = [dict(event='ready', backend='doca', routes=5, checksum_policy='hardware'),
+                  dict(event='stats', **expected_stats(ref, 'upstream'))]
+        with self.assertRaises(ValueError): check_run(ref, ref.expected, events, 0, '', [0, 0])
+        events[0]['checksum_policy'] = 'upstream'
+        events[1]['software_hw_lookup'] = [0, 0]
+        with self.assertRaises(ValueError): check_run(ref, ref.expected, events, 0, '', [0, 0])
 
 
 class ProcessTests(unittest.TestCase):

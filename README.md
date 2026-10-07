@@ -4,15 +4,18 @@ An incremental migration of the official DPDK `l3fwd` application to NVIDIA
 DOCA Flow. Start with two-port IPv4 longest-prefix-match forwarding, preserve
 the software baseline, then validate a hardware forwarding path against it.
 
-**Current stage: IPv4 implementation with cable-free hardware validation.**
-The application has a DOCA Flow 3.3 backend and a DPDK software backend. Physical
-DOCA rule installation and teardown pass through 1024 routes. The physical runner
-checks upstream packet bytes, hardware/software counters and port restoration.
-Internal PHY loopback passes the 1024-route, 2326-packet corpus with an explicit
-hardware checksum contract. Ten checksum edge cases differ from upstream;
-strict byte-for-byte equivalence still fails and performance is unmeasured. See
+**Current stage: end-to-end IPv4 functional migration validated.**
+The DOCA Flow 3.3 backend defaults to `--checksum-policy upstream`: hardware
+selects eligible cross-port routes, then software performs the exact upstream
+rewrite. The full 1024-route, 2326-packet corpus passes byte-for-byte comparison
+on real hardware using internal PHY loopback. All packets receive a CPU rewrite
+in this mode; it is hardware-assisted routing, not CPU-bypass forwarding.
+
+Explicit `--checksum-policy hardware` retains full offload for eligible packets,
+with ten documented checksum differences in this corpus. Performance, external
+link interoperability and Vera/Substrate benefits remain unmeasured. See
 [migration behavior](docs/MIGRATION.md), [results](docs/RESULTS.md) and
-[lab requirements](docs/VALIDATION.md) for the exact boundaries.
+[lab requirements](docs/VALIDATION.md) for exact coverage and reproducible commands.
 
 ## Layout
 
@@ -129,7 +132,7 @@ completion failures and timeouts; it does not simulate hardware forwarding.
 ## Hardware validation
 
 The [internal PHY loopback runner](docs/INTERNAL_LOOPBACK.md) validates the actual
-NIC parser, LPM, rewrite and software-exception paths using only the reserved DUT
+NIC parser, LPM, metadata, rewrite and software-exception paths using only the reserved DUT
 adapter. No external cables or generator adapter are needed on the validated
 device. It is a low-rate functional test with an explicit test capture pipe.
 
@@ -173,8 +176,11 @@ sudo build/doca/l3fwd-docaflow --lcores "0@${DUT_CPU}" -- --backend doca \
 Do not run this command against management interfaces. Only begin traffic after
 the JSON `ready` event; a failed setup exits without it. Stop the generator and
 allow counter refresh before the application exits. The final JSON reports
-software Rx/Tx/drop counts and hardware cross-port forwarding counter snapshots
-indexed by ingress port. A snapshot alone is not proof of end-to-end delivery.
+software Rx/Tx/drop counts, `hardware_lookups`, `software_hw_lookup` (metadata
+actually used), and `hardware_forwarded`, indexed by ingress port except software
+Tx (egress). The default policy uses CPU rewriting for all packets. Select
+`--checksum-policy hardware` explicitly for full offload with the documented
+checksum differences. A counter snapshot alone is not proof of delivery.
 
 ## License
 

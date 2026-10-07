@@ -135,10 +135,12 @@ def execute(args, directory):
                   ' IPv4 functional test; no performance claim',
                   routes=reference.route_count, traffic_sent=False, restored=False)
     result['checksum_policy'] = checksum_policy
-    result['expected_checksum_differences'] = len(getattr(reference, 'checksum_differences', []))
+    result['expected_checksum_differences'] = (len(getattr(reference, 'checksum_differences', []))
+                                              if checksum_policy == 'hardware' else 0)
     command = [config['doca_binary'], '--lcores', f"0@{config['cpu']}", '-m', '128',
                '--in-memory', '--file-prefix', directory.name, '--no-telemetry', '--',
-               '--backend', 'doca', '--routes', str(directory/'routes-v4.cfg'),
+               '--backend', 'doca', '--checksum-policy', checksum_policy,
+               '--routes', str(directory/'routes-v4.cfg'),
                '--device', config['dut_pci'][0], '--device', config['dut_pci'][1],
                '--allow-physical-ports', '--eth-dest', '0,'+peers[0]['mac'],
                '--eth-dest', '1,'+peers[1]['mac']]
@@ -157,6 +159,8 @@ def execute(args, directory):
                     ready = wait_ready(process, log, args.startup_timeout)
                     if ready.get('routes') != reference.route_count:
                         raise ValueError('DUT loaded a different route count')
+                    if ready.get('checksum_policy') != checksum_policy:
+                        raise ValueError('DUT did not enable the requested checksum policy')
                     if loopback and ready.get('internal_loopback_test') is not True:
                         raise ValueError('DUT did not enable loopback capture guard')
                     for state in peers: control.set_up(state, True)
