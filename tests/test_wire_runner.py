@@ -10,7 +10,19 @@ from unittest.mock import patch
 
 from wire_capture import capture_replay
 from wire_ports import admit_ports, isolated_ports, private_run_dir, wait_links, LinkUnavailable
-from wire_smoke import load_config, check_nic_deltas
+from wire_smoke import load_config, check_nic_deltas, nic_counters
+
+# Fixed mlx5 physical counter contract, independent of the production parser.
+ERROR_COUNTERS = ('rx_crc_errors_phy', 'rx_in_range_len_errors_phy',
+                  'rx_out_of_range_len_phy', 'rx_oversize_pkts_phy',
+                  'rx_symbol_err_phy', 'rx_unsupported_op_phy', 'rx_discards_phy',
+                  'tx_discards_phy', 'tx_errors_phy', 'rx_undersize_pkts_phy',
+                  'rx_fragments_phy', 'rx_jabbers_phy')
+
+
+def physical_snapshot(packets):
+    return [dict(rx_packets_phy=packets, tx_packets_phy=packets,
+                 **dict.fromkeys(ERROR_COUNTERS, 0)) for _ in range(4)]
 
 
 class PortTests(unittest.TestCase):
@@ -88,6 +100,23 @@ class PortTests(unittest.TestCase):
             with isolated_ports(states, control):
                 control.bad_identity = True
 
+    def test_down_failure_still_restores_ipv6_and_other_ports(self):
+        states = self.admit()
+        control = FakeControl(states)
+        original = control.set_up
+
+        def set_up(state, value):
+            if state['name'] == 'gen1' and not value:
+                raise OSError('injected port-down failure')
+            original(state, value)
+        control.set_up = set_up
+        with self.assertRaisesRegex(RuntimeError, 'port-down failure'):
+            with isolated_ports(states, control):
+                for state in states: control.set_up(state, True)
+        self.assertEqual(control.disabled, {name: 0 for name in self.names})
+        self.assertTrue(control.up['gen1'])  # The failed action is still reported.
+        self.assertFalse(any(control.up[name] for name in self.names if name != 'gen1'))
+
     def test_missing_link_and_dead_dut_fail(self):
         with self.assertRaises(LinkUnavailable):
             wait_links(self.admit(), .03, lambda: True, lambda state: False)
@@ -109,11 +138,36 @@ class PortTests(unittest.TestCase):
     def test_nic_counters_must_cover_all_four_ports(self):
         from types import SimpleNamespace
         ref = SimpleNamespace(inputs={0: [b'a'], 1: [b'b']}, expected={0: [b'c'], 1: [b'd']})
-        zero = [dict(rx_packets_phy=0, tx_packets_phy=0) for _ in range(4)]
-        one = [dict(rx_packets_phy=1, tx_packets_phy=1) for _ in range(4)]
+        zero, one = physical_snapshot(0), physical_snapshot(1)
         self.assertEqual(len(check_nic_deltas(zero, one, ref)), 4)
         for before, after in [(zero, zero), (one, zero), ([], []), (zero, one[:3])]:
             with self.assertRaises(ValueError): check_nic_deltas(before, after, ref)
+
+    def test_nic_errors_discards_resets_and_missing_counters_fail(self):
+        from types import SimpleNamespace
+        ref = SimpleNamespace(inputs={0: [b'a'], 1: [b'b']}, expected={0: [b'c'], 1: [b'd']})
+        zero, one = physical_snapshot(0), physical_snapshot(1)
+        for key in ERROR_COUNTERS:
+            for port in range(4):
+                after = copy.deepcopy(one)
+                after[port][key] = 1
+                with self.subTest(key=key, port=port), self.assertRaises(ValueError):
+                    check_nic_deltas(zero, after, ref)
+        before = copy.deepcopy(zero)
+        before[0]['rx_crc_errors_phy'] = 10
+        with self.assertRaises(ValueError): check_nic_deltas(before, one, ref)
+        missing = copy.deepcopy(one)
+        del missing[2]['tx_discards_phy']
+        with self.assertRaises(ValueError): check_nic_deltas(zero, missing, ref)
+
+    def test_nic_snapshot_retains_required_errors_and_rejects_missing(self):
+        counters = physical_snapshot(7)[0]
+        output = '\n'.join(f'    {key}: {value}' for key, value in counters.items())+'\n'
+        with patch('wire_smoke.subprocess.check_output', return_value=output):
+            self.assertEqual(nic_counters(self.admit(), self.root, 'before'), [counters]*4)
+        missing = output.replace('    rx_crc_errors_phy: 0\n', '')
+        with patch('wire_smoke.subprocess.check_output', return_value=missing):
+            with self.assertRaises(ValueError): nic_counters(self.admit(), self.root, 'after')
 
 
 class FakeControl:

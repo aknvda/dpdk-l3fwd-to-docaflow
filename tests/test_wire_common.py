@@ -1,9 +1,11 @@
 import json
 from pathlib import Path
 import subprocess
+import signal
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from pcap_smoke import generate, read_pcap, write_pcap
 from wire_common import load_reference, check_run, wait_ready, stop_process
@@ -95,6 +97,27 @@ class ProcessTests(unittest.TestCase):
                     finally:
                         stop_process(p)
                 self.assertIsNotNone(p.poll())
+
+    def test_cancellation_during_real_child_wait_reaps_child(self):
+        with tempfile.TemporaryDirectory() as td:
+            log = Path(td)/'app.log'
+            code = ('import signal,sys,time; signal.signal(signal.SIGINT,lambda *_:sys.exit(0)); '
+                    "print('{\"event\":\"ready\",\"backend\":\"doca\",\"routes\":5}',flush=True); time.sleep(10)")
+            with log.open('w') as stream:
+                process = subprocess.Popen([sys.executable, '-c', code], stdout=stream, stderr=stream)
+                try:
+                    wait_ready(process, log, 2)
+                    wait = process.wait
+
+                    def interrupted_wait(*args, **kwargs):
+                        signal.raise_signal(signal.SIGINT)
+                        return wait(*args, **kwargs)
+                    with patch.object(process, 'wait', side_effect=interrupted_wait):
+                        with self.assertRaises(KeyboardInterrupt): stop_process(process)
+                    self.assertEqual(process.poll(), 0)
+                finally:
+                    if process.poll() is None: process.kill()
+                    process.wait(timeout=2)
 
     def test_ready_requires_live_process_and_valid_json(self):
         with tempfile.TemporaryDirectory() as td:

@@ -22,6 +22,15 @@ from wire_common import check_run, load_reference, read_events, stop_process, wa
 from wire_ports import (HostControl, LinkUnavailable, admit_ports, ip_json,
                         isolated_ports, private_run_dir, wait_links)
 
+# mlx5 physical port counters, from Linux en_stats.c (802.3, 2863 and 2819).
+# See docs/WIRE_VALIDATION.md for the source and required driver contract.
+PACKET_COUNTERS = ('rx_packets_phy', 'tx_packets_phy')
+ERROR_COUNTERS = ('rx_crc_errors_phy', 'rx_in_range_len_errors_phy',
+                  'rx_out_of_range_len_phy', 'rx_oversize_pkts_phy',
+                  'rx_symbol_err_phy', 'rx_unsupported_op_phy', 'rx_discards_phy',
+                  'tx_discards_phy', 'tx_errors_phy', 'rx_undersize_pkts_phy',
+                  'rx_fragments_phy', 'rx_jabbers_phy')
+
 
 def load_config(path):
     config = json.loads(Path(path).read_text())
@@ -60,11 +69,12 @@ def nic_counters(states, directory, label):
     for i, state in enumerate(states):
         output = subprocess.check_output(['ethtool', '-S', state['name']], text=True, timeout=10)
         (directory/f'{label}-nic-{i}.txt').write_text(output)
-        values = {k: int(v) for k, v in re.findall(r'^\s*(rx_packets_phy|tx_packets_phy):\s*(\d+)\s*$',
+        values = {k: int(v) for k, v in re.findall(r'^\s*([a-z0-9_]+):\s*(\d+)\s*$',
                                                  output, re.MULTILINE)}
-        if len(values) != 2:
-            raise ValueError('NIC must expose rx_packets_phy and tx_packets_phy counters')
-        counters.append(values)
+        missing = set(PACKET_COUNTERS+ERROR_COUNTERS)-values.keys()
+        if missing:
+            raise ValueError('NIC lacks required physical counters: '+', '.join(sorted(missing)))
+        counters.append({key: values[key] for key in PACKET_COUNTERS+ERROR_COUNTERS})
     return counters
 
 
@@ -73,12 +83,18 @@ def check_nic_deltas(before, after, reference):
         raise ValueError('Require physical counter snapshots for all four ports')
     deltas = []
     for i, (first, last) in enumerate(zip(before, after)):
+        for snapshot in (first, last):
+            if any(type(snapshot.get(key)) is not int or snapshot[key] < 0
+                   for key in PACKET_COUNTERS+ERROR_COUNTERS):
+                raise ValueError('Missing or invalid required physical NIC counter')
         p = i % 2
         rx = len(reference.inputs[p]) if i < 2 else len(reference.expected[p])
         tx = len(reference.expected[p]) if i < 2 else len(reference.inputs[p])
-        delta = {key: last[key]-first[key] for key in first}
+        delta = {key: last[key]-first[key] for key in PACKET_COUNTERS+ERROR_COUNTERS}
         if delta['rx_packets_phy'] < rx or delta['tx_packets_phy'] < tx:
             raise ValueError('Physical NIC counter deltas do not cover the complete corpus')
+        if any(delta[key] != 0 for key in ERROR_COUNTERS):
+            raise ValueError('Physical NIC error/discard counters changed during the test')
         deltas.append(delta)
     return deltas
 

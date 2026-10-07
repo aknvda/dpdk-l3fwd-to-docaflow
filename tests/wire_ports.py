@@ -7,6 +7,8 @@ import subprocess
 import time
 import uuid
 
+from wire_cleanup import defer_cancellation
+
 PCI = re.compile(r'[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]')
 INTERFACE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,14}')
 
@@ -115,16 +117,23 @@ def isolated_ports(states, control=None):
             control.set_ipv6(state, 1)  # Prevent auto-created link-local addresses.
         yield control
     finally:
-        errors = []
-        for state, value in reversed(saved):
-            try:
-                control.set_up(state, False)
-                control.set_ipv6(state, value)
-                control.verify(state)
-                if control.read_ipv6(state) != value: raise RuntimeError('IPv6 setting changed')
-            except Exception as error:
-                errors.append(str(error))
-        if errors: raise RuntimeError('Failed to restore reserved interfaces: '+'; '.join(errors))
+        with defer_cancellation():
+            errors = []
+            for state, value in reversed(saved):
+                # A failed operation must not suppress the remaining restoration.
+                # Mutating HostControl methods each recheck device identity.
+                for operation, args in [(control.set_up, (state, False)),
+                                        (control.set_ipv6, (state, value)),
+                                        (control.verify, (state,))]:
+                    try:
+                        operation(*args)
+                    except Exception as error:
+                        errors.append(str(error))
+                try:
+                    if control.read_ipv6(state) != value: raise RuntimeError('IPv6 setting changed')
+                except Exception as error:
+                    errors.append(str(error))
+            if errors: raise RuntimeError('Failed to restore reserved interfaces: '+'; '.join(errors))
 
 
 def carrier(state):

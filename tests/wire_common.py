@@ -9,6 +9,7 @@ import tempfile
 import time
 
 from pcap_smoke import compare_frames, generate, read_pcap
+from wire_cleanup import defer_cancellation
 
 
 @dataclass
@@ -94,14 +95,15 @@ def wait_ready(process, log, timeout):
 
 
 def stop_process(process, timeout=10):
-    if process.poll() is None:
-        process.send_signal(signal.SIGINT)
-    try:
-        return process.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait()
-        raise RuntimeError('DUT failed to stop after SIGINT; forced termination')
+    with defer_cancellation():
+        if process.poll() is None:
+            process.send_signal(signal.SIGINT)
+        try:
+            return process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            raise RuntimeError('DUT failed to stop after SIGINT; forced termination')
 
 
 def check_run(reference, actual, events, exit_code, log, capture_drops):
