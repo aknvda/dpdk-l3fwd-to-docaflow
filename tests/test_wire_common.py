@@ -81,7 +81,22 @@ class ReferenceTests(unittest.TestCase):
         duplicate = {p: list(v) for p, v in ref.expected.items()}
         duplicate[0].append(duplicate[0][0])
         with self.assertRaises(AssertionError):
-            check_run(ref, duplicate, events, 0, '', [0, 0])
+                check_run(ref, duplicate, events, 0, '', [0, 0])
+
+    def test_hardware_checksum_contract_is_explicit_and_narrow(self):
+        ref = load_reference(self.path, DUT, PEER)
+        self.assertEqual(len(ref.checksum_differences), 10)
+        events = [dict(event='ready', backend='doca', routes=5), dict(event='stats', **ref.stats)]
+        with self.assertRaises(AssertionError):
+            check_run(ref, ref.hardware_expected, events, 0, '', [0, 0])
+        check_run(ref, ref.hardware_expected, events, 0, '', [0, 0], checksum_policy='hardware')
+        for offset in [22, 24, 26, 42]:
+            corrupt = {p: list(frames) for p, frames in ref.hardware_expected.items()}
+            frame = bytearray(corrupt[0][0]); frame[offset] ^= 1; corrupt[0][0] = bytes(frame)
+            with self.assertRaises(AssertionError):
+                check_run(ref, corrupt, events, 0, '', [0, 0], checksum_policy='hardware')
+        with self.assertRaises(ValueError):
+            check_run(ref, ref.expected, events, 0, '', [0, 0], checksum_policy='ignore')
 
 
 class ProcessTests(unittest.TestCase):

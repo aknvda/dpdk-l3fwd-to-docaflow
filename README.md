@@ -4,12 +4,13 @@ An incremental migration of the official DPDK `l3fwd` application to NVIDIA
 DOCA Flow. Start with two-port IPv4 longest-prefix-match forwarding, preserve
 the software baseline, then validate a hardware forwarding path against it.
 
-**Current stage: IPv4 implementation and repeatable physical validation runner.**
+**Current stage: IPv4 implementation with cable-free hardware validation.**
 The application has a DOCA Flow 3.3 backend and a DPDK software backend. Physical
 DOCA rule installation and teardown pass through 1024 routes. The physical runner
 checks upstream packet bytes, hardware/software counters and port restoration.
-Physical packet equivalence and performance remain unverified; the last physical
-run was blocked by absent link carrier. See
+Internal PHY loopback passes the 1024-route, 2326-packet corpus with an explicit
+hardware checksum contract. Ten checksum edge cases differ from upstream;
+strict byte-for-byte equivalence still fails and performance is unmeasured. See
 [migration behavior](docs/MIGRATION.md), [results](docs/RESULTS.md) and
 [lab requirements](docs/VALIDATION.md) for the exact boundaries.
 
@@ -126,6 +127,11 @@ These checks do not probe physical ports. The DOCA test suite includes injected
 completion failures and timeouts; it does not simulate hardware forwarding.
 
 ## Hardware validation
+
+The [internal PHY loopback runner](docs/INTERNAL_LOOPBACK.md) validates the actual
+NIC parser, LPM, rewrite and software-exception paths using only the reserved DUT
+adapter. No external cables or generator adapter are needed on the validated
+device. It is a low-rate functional test with an explicit test capture pipe.
 
 Use the [physical packet runner](docs/WIRE_VALIDATION.md) for the reproducible
 upstream-to-DOCA comparison on two reserved adapters in one Linux host. It includes

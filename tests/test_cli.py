@@ -52,6 +52,20 @@ class CliTests(unittest.TestCase):
         self.assertIn('device probing', result.stderr)
         self.assertNotIn('EAL:', result.stderr)
 
+    def test_internal_loopback_requires_doca_and_explicit_opt_in(self):
+        base = ['--check-config', '--routes', str(ROOT/'configs/routes-v4.cfg'),
+                '--internal-loopback-test']
+        for extra in (['--backend', 'software'],
+                      ['--backend', 'doca', '--device', '0000:00:01.0',
+                       '--device', '0000:00:01.1']):
+            result = self.run_app(*(base+extra))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn('EAL:', result.stderr)
+        result = self.run_app(*(base+['--backend', 'doca', '--device', '0000:00:01.0',
+                                     '--device', '0000:00:01.1', '--allow-physical-ports']))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('EAL:', result.stderr)
+
 
 if __name__ == '__main__':
     unittest.main()

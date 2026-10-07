@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import time
 
-from pcap_smoke import compare_frames, generate, read_pcap
+from pcap_smoke import compare_frames, generate, read_pcap, checksum
 from wire_cleanup import defer_cancellation
 
 
@@ -20,6 +20,8 @@ class Reference:
     routes: Path
     route_count: int
     digests: dict
+    hardware_expected: dict
+    checksum_differences: list
 
 
 def load_reference(path, dut_macs, peer_macs):
@@ -52,20 +54,38 @@ def load_reference(path, dut_macs, peer_macs):
         raise ValueError('Reference result counts do not match its captures')
     stats = dict(software_rx=[0, 0], software_tx=[0, 0], software_dropped=0,
                  tx_dropped=0, hardware_forwarded=[0, 0])
+    hardware_expected, differences, indices = {0: [], 1: []}, [], [0, 0]
     for p in (0, 1):
         cases = [c for c in manifest if c['ingress'] == p]
         for frame, case in zip(inputs[p], cases):
             egress = case['egress']
-            if p != egress and frame[22] >= 2:
+            offloaded = p != egress and frame[22] >= 2
+            if offloaded:
                 stats['hardware_forwarded'][p] += 1
             else:
                 stats['software_rx'][p] += 1
                 stats['software_tx'][egress] += 1
+            # The generated multiset above was checked against actual upstream
+            # output. Walk its declared case order to identify only offloaded
+            # outputs. Never infer exceptions from the DUT capture being judged.
+            upstream = generated[egress][indices[egress]]
+            indices[egress] += 1
+            output = bytearray(upstream)
+            if offloaded:
+                header = bytearray(output[14:34]); header[10:12] = b'\0\0'
+                output[24:26] = checksum(header).to_bytes(2, 'big')
+                if output[24:26] != upstream[24:26]:
+                    differences.append(dict(case_id=case['id'], ingress=p, egress=egress,
+                                            input_checksum=frame[24:26].hex(),
+                                            upstream_checksum=upstream[24:26].hex(),
+                                            hardware_checksum=output[24:26].hex()))
+            hardware_expected[egress].append(peer_macs[egress]+dut_macs[egress]+bytes(output[12:]))
     expected = {p: [peer_macs[p]+dut_macs[p]+frame[12:] for frame in actual[p]] for p in (0, 1)}
     inputs = {p: [dut_macs[p]+peer_macs[p]+frame[12:] for frame in inputs[p]] for p in (0, 1)}
     names = ['result.json', 'routes-v4.cfg', 'rx0.pcap', 'rx1.pcap', 'tx0.pcap', 'tx1.pcap']
     digests = {name: hashlib.sha256((path/name).read_bytes()).hexdigest() for name in names}
-    return Reference(inputs, expected, stats, path/'routes-v4.cfg', count, digests)
+    return Reference(inputs, expected, stats, path/'routes-v4.cfg', count, digests,
+                     hardware_expected, differences)
 
 
 def read_events(text):
@@ -106,7 +126,8 @@ def stop_process(process, timeout=10):
             raise RuntimeError('DUT failed to stop after SIGINT; forced termination')
 
 
-def check_run(reference, actual, events, exit_code, log, capture_drops):
+def check_run(reference, actual, events, exit_code, log, capture_drops, checksum_policy='upstream'):
+    if checksum_policy not in ('upstream', 'hardware'): raise ValueError('Unknown checksum policy')
     if exit_code or '[ERR]' in log or capture_drops != [0, 0]:
         raise ValueError('DUT exit, SDK error or packet capture loss prevents acceptance')
     if len(events) != 2 or events[0].get('event') != 'ready' or events[1].get('event') != 'stats':
@@ -120,4 +141,4 @@ def check_run(reference, actual, events, exit_code, log, capture_drops):
             raise ValueError(f'Counter mismatch for {key}: expected {expected}, observed {observed}')
     if not any(reference.stats['hardware_forwarded']):
         raise ValueError('Empty hardware workload cannot establish offload')
-    compare_frames(reference.expected, actual)
+    compare_frames(reference.expected if checksum_policy == 'upstream' else reference.hardware_expected, actual)

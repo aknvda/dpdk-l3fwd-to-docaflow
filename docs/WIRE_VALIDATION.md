@@ -5,10 +5,14 @@ unmodified upstream l3fwd. It uses two generator ports on a separate adapter in
 the same Linux host. This is a bounded, low-rate functional test. It does not
 measure throughput, latency, maximum route capacity or Vera/Substrate scaling.
 
-The implemented harness has passed portable tests and real Linux packet-socket
+For the cable-free alternative using only the DUT, see
+[INTERNAL_LOOPBACK.md](INTERNAL_LOOPBACK.md). That fixture has passed actual
+hardware forwarding with documented checksum differences.
+
+The implemented external-wire harness has passed portable tests and real Linux packet-socket
 tests in an isolated network namespace. Physical startup and no-link cleanup
-have been exercised. **Physical packet equivalence has not passed yet:** the
-last physical run found no carrier on the reserved test links. See [RESULTS.md](RESULTS.md).
+have been exercised. External-wire packet acceptance remains open because the
+reserved external links have no carrier. See [RESULTS.md](RESULTS.md).
 
 ## Prerequisites
 

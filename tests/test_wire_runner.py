@@ -67,6 +67,7 @@ class PortTests(unittest.TestCase):
         vf = self.root/'bus/pci/devices'/self.devices[2]/'sriov_numvfs'
         vf.write_text('1')
         with self.assertRaises(ValueError): self.admit()
+
         vf.write_text('0')
         upper = self.root/'class/net/gen0/upper_bridge'
         upper.touch()
@@ -74,6 +75,14 @@ class PortTests(unittest.TestCase):
         upper.unlink()
         self.links[3]['flags'].append('UP')
         with self.assertRaises(ValueError): self.admit()
+
+    def test_internal_loopback_admits_only_isolated_dut(self):
+        self.links[2]['flags'].append('UP')  # Unrelated generator is not selected.
+        states = admit_ports(self.devices[:2], None, self.root, self.links)
+        self.assertEqual([s['name'] for s in states], self.names[:2])
+        self.links[1]['flags'].append('UP')
+        with self.assertRaises(ValueError):
+            admit_ports(self.devices[:2], None, self.root, self.links)
 
     def test_private_output_rejects_git_tree(self):
         (self.root/'.git').mkdir()

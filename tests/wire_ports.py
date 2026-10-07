@@ -22,11 +22,12 @@ def ip_json(*args):
 
 
 def admit_ports(dut_pci, generators, sysfs=Path('/sys'), links=None):
+    """generators=None admits only the DUT for internal PHY loopback."""
     if (len(dut_pci) != 2 or len(set(dut_pci)) != 2 or
             any(not PCI.fullmatch(p) for p in dut_pci) or dut_pci[0][:-1] != dut_pci[1][:-1]):
         raise ValueError('Require two distinct DUT functions on the same adapter')
-    if len(generators) != 2 or len(set(generators)) != 2 or any(
-            not INTERFACE.fullmatch(n) for n in generators):
+    if generators is not None and (len(generators) != 2 or len(set(generators)) != 2 or any(
+            not INTERFACE.fullmatch(n) for n in generators)):
         raise ValueError('Require two distinct generator interface names')
     sysfs = Path(sysfs)
     by_name = {x['ifname']: x for x in (ip_json('addr', 'show') if links is None else links)}
@@ -36,12 +37,12 @@ def admit_ports(dut_pci, generators, sysfs=Path('/sys'), links=None):
         entries = list(net.iterdir())
         if len(entries) != 1: raise ValueError('Require one kernel interface per DUT function')
         names.append(entries[0].name)
-    names += generators
-    if len(set(names)) != 4: raise ValueError('DUT and generator interfaces must be disjoint')
+    names += generators or []
+    if len(set(names)) != len(names): raise ValueError('DUT and generator interfaces must be disjoint')
     devices = [(sysfs/'class/net'/n/'device').resolve(strict=True).name for n in names]
     if devices[:2] != dut_pci or any(not PCI.fullmatch(p) for p in devices):
         raise ValueError('Require physical PCI network interfaces')
-    if devices[2][:-1] != devices[3][:-1] or devices[0][:-1] == devices[2][:-1]:
+    if generators is not None and (devices[2][:-1] != devices[3][:-1] or devices[0][:-1] == devices[2][:-1]):
         raise ValueError('Generator must use a separate two-port adapter')
     # Inspect every function on either adapter, including unselected siblings.
     for prefix in {p[:-1] for p in devices}:
