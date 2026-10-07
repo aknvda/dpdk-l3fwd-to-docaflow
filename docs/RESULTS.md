@@ -5,43 +5,60 @@ and raw inventories are intentionally kept outside the repository.
 
 ## Internal PHY end-to-end result
 
-Two consecutive cable-free runs passed the full **1024-route / 2326-packet**
-corpus under the explicit `hardware` checksum contract, on ConnectX-6 Dx firmware
-22.48.1000 with DOCA 3.3.0109 and packaged DPDK. **Exact upstream byte parity
-fails:** ten offloaded checksum boundary cases differ, as detailed below. No
-packet was omitted, and the strict test remains the default.
+The default `--checksum-policy upstream` now passes **exact upstream byte parity**
+on the complete **1024-route / 2326-packet** corpus. Two consecutive cable-free
+runs passed on ConnectX-6 Dx firmware 22.48.1000, DOCA 3.3.0109 and packaged DPDK
+25.11.0+doca2601.2. Upstream inputs and expected IPv4 bytes were unchanged; only
+Ethernet addresses were adapted for the physical ports.
 
-| Measurement, each run | Result |
+DOCA resolves eligible cross-port routes and stamps the egress in packet metadata.
+Software consumes that decision without repeating LPM, then applies upstream's
+exact MAC/TTL/checksum rewrite. **Every packet is CPU rewritten in this mode.**
+This establishes functional hardware-assisted routing, not CPU-bypass forwarding
+or a speedup. Both strict runs recorded `upstream_byte_equivalent: true`.
+
+| Measurement, each strict run | Result |
 | --- | --- |
-| Captured egress frames | 1140 on port 0, 1186 on port 1; all full bytes match the selected contract |
-| Hardware-forwarded packets by ingress | 557 / 542 (1099 total) |
-| Software Rx by ingress | 606 / 621 |
-| Software Tx by egress | 598 / 629 (1227 total) |
+| Captured egress frames | 1140 on port 0, 1186 on port 1; every byte matches upstream |
+| Hardware route lookups by ingress | 557 / 542 (1099 total) |
+| Software packets using hardware metadata | 557 / 542, matching hardware lookup counters |
+| Fully hardware-forwarded packets | 0 / 0, explicitly distinguished from hardware lookups |
+| Software Rx by ingress | 1163 / 1163 |
+| Software Tx by egress | 1140 / 1186 |
 | Software drops / unsent Tx / capture drops | All zero |
 | Physical Rx and Tx on port 0 | 2303 each: 1163 injected inputs + 1140 returned outputs |
 | Physical Rx and Tx on port 1 | 2349 each: 1163 injected inputs + 1186 returned outputs |
 | Twelve NIC error/discard counter deltas | All zero on both ports |
-| Shutdown and restart | Both exits 0; no SDK errors; PHY loopback disabled and interface settings/default routes restored |
-| Regression tests | 37 Python tests against each Linux executable, no skips; 6 DOCA and 4 software C suites pass |
+| Shutdown and restart | Both exits 0; no SDK errors; loopback disabled and interface settings/default routes restored |
+| Regression tests | 39 Python tests against each Linux executable, no skips; 6 DOCA and 4 software C suites pass |
+| Rebuilt software backend | Full 2326-frame / 1024-route PCAP PASS, 30-second window |
+| Portable C sanitizer checks | PASS, including selected-port bounds, rejected-frame immutability and TTL/checksum boundaries |
 
-The strict run delivered every packet with the expected hardware/software counts,
-but failed byte comparison: four checksum differences on egress 0 and six on
-egress 1. Five cases transform input `feff` into hardware `0000` versus upstream
-`ffff`; both outputs are valid one's-complement encodings. Five cases transform
-valid input `ffff` into hardware `0100` versus upstream `0000`; the upstream
-output checksum is invalid after the TTL change.
+### Explicit full hardware forwarding policy
 
-The separate `hardware` contract independently calculates canonical checksums
-only for offloaded packets, before replay, and requires exact equality for all
-other bytes and all software-path packets. Results explicitly record
-`upstream_byte_equivalent: false`. This confirms actual hardware forwarding with
-a documented compatibility difference; it does not establish exact equivalence
-or authorize silently replacing the strict contract in downstream acceptance.
+`--checksum-policy hardware` retains the original offload path. Its regression
+run passes the same full corpus under the explicit canonical-checksum contract:
+557 / 542 hardware-forwarded packets, software Rx 606 / 621, software Tx 598 / 629,
+zero hardware-assisted lookup counters, all drops/error deltas zero and restored
+ports. This mode records `upstream_byte_equivalent: false`.
+
+Ten checksum boundary cases differ from upstream: four on egress 0, six on
+egress 1. Five transform input `feff` into hardware `0000` versus upstream `ffff`;
+both outputs are valid one's-complement encodings. Five transform valid input
+`ffff` into hardware `0100` versus upstream `0000`; upstream's output checksum
+is invalid after the TTL change. Hardware-mode expectations are independently
+computed before replay, only for offloaded packets. Every other byte and every
+software-path packet must match upstream. No packet is omitted or normalized.
+
+The default strict implementation closes those differences by preserving the
+sample's raw checksum increment in software. The explicit hardware alternative
+retains its documented difference; its PASS is not an exact-equivalence result.
 See [INTERNAL_LOOPBACK.md](INTERNAL_LOOPBACK.md) for reproducible commands.
 
 The test hook uses two additional pipes per port to terminate returned frames in
 the kernel. External cables, optics, peer interoperability, line rate, latency
-and Vera/Substrate benefits remain unmeasured.
+and Vera/Substrate benefits remain unmeasured. Full malformed-frame, options and
+fragment equivalence are not established by this bounded IPv4/UDP corpus.
 
 ## Earlier baseline and control-plane evidence
 

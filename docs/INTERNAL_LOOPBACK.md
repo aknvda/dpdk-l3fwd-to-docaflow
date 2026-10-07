@@ -2,7 +2,7 @@
 
 Internal PHY loopback returns each transmitted frame to the same NIC port's
 receive path. The runner injects through Linux AF_PACKET, traverses the actual
-DOCA admission/LPM/rewrite pipeline, and captures the returned egress frame.
+DOCA admission/LPM and selected rewrite pipeline, and captures the returned egress frame.
 Same-port and TTL exceptions traverse the actual application software path.
 This is a functional test, not a throughput or latency benchmark.
 
@@ -54,7 +54,7 @@ traffic; binding while DOWN can retain a pending Linux AF_PACKET `ENETDOWN` erro
 
 ```text
 AF_PACKET injection -> local PHY loopback -> DOCA ingress admission/LPM
- -> hardware rewrite or software exception -> selected egress port Tx
+ -> hardware-assisted software rewrite, hardware rewrite, or exception -> egress Tx
  -> local PHY loopback -> test source-MAC guard -> kernel AF_PACKET capture
 ```
 
@@ -69,13 +69,18 @@ hardware/software counters, zero capture drops, zero changes in twelve NIC
 error/discard counters and exact physical Rx/Tx counts for both loopback legs.
 All reference packets remain in the test. No observed packet is normalized.
 
-`upstream` compares against the unmodified real upstream output, after Ethernet
-address adaptation. It correctly fails on ten known checksum cases in the
-2326-packet corpus. `hardware` computes the expected canonical IPv4 checksum
-only for packets independently classified as offloaded, before transmission.
-Everything else, including software exception output, stays unchanged. The
-result names the policy and includes `upstream_byte_equivalent: false`; a PASS
-under `hardware` must never be described as exact upstream parity.
+`upstream` selects hardware route metadata plus software rewriting in the DUT
+and compares against unchanged real upstream output after Ethernet adaptation.
+All 2326 packets pass, including the ten checksum boundaries. Acceptance requires
+hardware lookup counters and matching software metadata-consumption counters;
+all packets undergo CPU rewriting, so this is not full forwarding offload.
+
+`hardware` explicitly selects the NIC rewrite path and computes the expected
+canonical IPv4 checksum only for independently classified offloaded packets,
+before transmission. Everything else, including exception outputs, stays
+unchanged. This mode passes its contract but records
+`upstream_byte_equivalent: false` for this corpus. The strict policy records
+`upstream_byte_equivalent: true`. Neither result establishes a speedup.
 
 Artifacts retain input, strict upstream expected, hardware expected and actual
 PCAPs; a per-case checksum difference list; reference and binary hashes; command,

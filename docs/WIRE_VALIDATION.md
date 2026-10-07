@@ -7,7 +7,8 @@ measure throughput, latency, maximum route capacity or Vera/Substrate scaling.
 
 For the cable-free alternative using only the DUT, see
 [INTERNAL_LOOPBACK.md](INTERNAL_LOOPBACK.md). That fixture has passed actual
-hardware forwarding with documented checksum differences.
+hardware-assisted routing with exact upstream bytes, and explicit full hardware
+forwarding with documented checksum differences.
 
 The implemented external-wire harness has passed portable tests and real Linux packet-socket
 tests in an isolated network namespace. Physical startup and no-link cleanup
@@ -63,9 +64,11 @@ workflow, not an attestation of an untrusted executable or result file.
 
 Only the twelve Ethernet address bytes are adapted to the actual port MACs.
 IPv4 addresses, TTL, checksum, payload and frame multiplicity remain unchanged.
-The checksum boundaries described in [MIGRATION.md](MIGRATION.md) are included;
-a hardware checksum difference fails acceptance and requires an explicit
-compatibility decision or implementation change.
+The checksum boundaries described in [MIGRATION.md](MIGRATION.md) are included.
+The runner defaults to `upstream` policy in both DUT and checker: hardware-assisted
+lookup plus exact software rewrite. `--checksum-policy hardware` explicitly
+selects full offload with the documented checksum differences; both modes require
+exact complete bytes against their independently determined expectations.
 
 ## Configure and execute
 
@@ -102,7 +105,7 @@ sudo python3 tests/wire_smoke.py --config "$LAB_CONFIG" \
   --allow-physical-ports
 ```
 
-Capture sockets open before DUT startup. Traffic starts only after the DOCA
+Capture sockets bind after DUT setup and before traffic. Traffic starts only after the DOCA
 `ready` event and carrier on all four ports. The runner sends the complete
 corpus at 200 aggregate packets/s by default (`--pps`, range 1–1000), then
 continues capture for three seconds (`--settle`, range 3–60). It never stops
@@ -126,7 +129,8 @@ A physical `PASS` requires all of the following:
 
 - Complete byte-for-byte frame multisets on each egress, with no missing,
   duplicate, corrupted or wrong-port frames during the observation window.
-- Exact expected hardware cross-port and software exception Rx/Tx counts;
+- Exact mode-specific hardware-forwarding or lookup/metadata-consumption counts
+  and software Rx/Tx counts;
   no application drops, capture drops, SDK errors or unsuccessful DUT exit.
 - Physical Rx/Tx counter deltas on every DUT/generator port covering the corpus,
   and zero deltas for all required NIC error/discard counters.

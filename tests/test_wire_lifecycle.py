@@ -69,7 +69,7 @@ class LifecycleTests(unittest.TestCase):
                                     HostControl=Mock(return_value=control),
                                     ip_json=Mock(return_value=[]),
                                     packet_socket=Mock(side_effect=open_socket),
-                                    wait_ready=Mock(return_value={'routes': 5}),
+                                    wait_ready=Mock(return_value={'routes': 5, 'checksum_policy': 'upstream'}),
                                     wait_links=Mock(side_effect=lambda *_: order.append('linked')),
                                     packet_drops=Mock(return_value=0),
                                     capture_replay=Mock(), nic_counters=Mock(return_value=[]),

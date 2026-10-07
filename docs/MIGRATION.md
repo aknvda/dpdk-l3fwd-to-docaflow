@@ -8,26 +8,39 @@ DPDK API or every `l3fwd` option.
 | --- | --- |
 | Route-file loading | `forward.c`: IPv4 prefixes /1 through /32, logical ports 0/1, maximum 1024 unique routes |
 | `rte_lpm` destination lookup | `flow.c`: destination IPv4 LPM pipe per ingress port |
-| MAC rewrite and TTL decrement | One rewrite entry per ingress, forwarding to the paired egress |
-| Packet polling and transmit | `main.c`: DPDK queue 0 on each port for software exceptions |
+| MAC rewrite and TTL decrement | Default: exact upstream software rewrite using hardware-selected egress; explicit hardware policy: one rewrite entry per ingress forwarding to paired egress |
+| Packet polling and transmit | `main.c`: DPDK queue 0 on each port for hardware-assisted packets and exceptions |
 | Rule setup | Synchronous errors plus per-entry asynchronous completion checks, bounded to two seconds per submitted entry |
 | Device lifecycle | Explicit DOCA device open/probe, DPDK queues, flow ports and bidirectional pairing; teardown in reverse dependency order |
 
-The DOCA pipeline on each ingress port is:
+The default `--checksum-policy upstream` pipeline on each ingress port is:
 
 ```text
-root IPv4 admission -> destination LPM -> cross-port MAC/TTL rewrite -> paired port
-         | miss              | miss or same-port hit
-         +-------------------+----> catch-all RSS pipe -> software Rx/forward/Tx
+root IPv4 admission -> destination LPM -> counted egress metadata + RSS
+         | miss              | miss or same-port hit          |
+         +-------------------+----> exception RSS             |
+                                       |                     |
+                                  software LPM        metadata egress
+                                       +----------+----------+
+                                                  |
+                              exact upstream MAC/TTL/checksum rewrite -> Tx
 ```
 
-RSS is the exception pipe's matching action. Miss actions point to that pipe;
-they do not use RSS directly. Exceptions reach software before any rewrite,
-so the application applies the TTL/MAC changes once.
+The metadata path leaves packet bytes untouched and avoids a second LPM lookup.
+The application validates the metadata marker and output port before using it.
+Packets without valid route metadata use the software LPM path. Every packet is
+rewritten and transmitted by the CPU in this mode, including hardware route hits.
+The validation runner requires exact nonzero hardware lookup and consumed
+metadata counts, so losing metadata cannot silently pass as hardware assistance.
+
+Explicit `--checksum-policy hardware` replaces the counted metadata/RSS branch
+with MAC/TTL rewrite and paired-port forwarding. Eligible cross-port packets then
+bypass software; misses, same-port routes and parser/TTL exceptions use software.
+RSS is a matching action, never a direct miss action. Both modes rewrite once.
 
 The root admits untagged, unfragmented IPv4 packets with IHL 5, valid parser
 L3/checksum flags and TTL 2..255. There are 254 TTL entries, one LPM entry per
-route, one rewrite entry and one exception entry per ingress. Root matching,
+route, one rewrite or metadata entry and one exception entry per ingress. Root matching,
 LPM support and the combined actions have passed internal PHY validation on the
 reported device/SDK combination; admit other combinations independently.
 Entries are completed individually for bounded resource use; insertion is not
@@ -56,19 +69,19 @@ Next-hop MAC addresses must be supplied explicitly for a physical test.
   than adding router-style TTL expiry and ICMP. These inputs are excluded from
   hardware rewriting and are part of the software differential corpus.
 - The upstream sample increments the stored IPv4 checksum word directly.
-  The software backend preserves that little-endian behavior. **Hardware is not
-  byte-for-byte equivalent on checksum edge cases.** Input checksum `0xfeff` becomes
-  `0xffff` in upstream, whereas full recomputation produces `0x0000` (both encode
-  a valid output). A valid noncanonical `0xffff` input produces `0x0000` upstream
-  after TTL decrement, while correct recomputation gives `0x0100`. The root cannot
-  distinguish these checksum values using its current match fields. They are
-  included in the extended corpus. Hardware testing confirmed ten differences
-  across 2326 packets. The runner defaults to strict upstream comparison and
-  fails on these differences. Its explicit `--checksum-policy hardware` contract
-  instead requires canonical IPv4 checksums on offloaded packets, while checking
-  every other byte and all software-path outputs against upstream. It writes
-  both expectations and the per-case differences before sending any traffic.
-  This is a documented behavioral difference, not exact upstream compatibility.
+  Default `upstream` policy preserves that native-endian behavior through software
+  rewriting, including checksum edge cases. The validated target is little-endian
+  Linux x86_64. The software backend accepts only this policy.
+- Explicit `hardware` policy uses the NIC TTL/checksum action. Input checksum
+  `0xfeff` becomes `0xffff` in upstream versus canonical `0x0000` in hardware;
+  both outputs are valid. Valid noncanonical input `0xffff` becomes `0x0000`
+  upstream after TTL decrement (invalid checksum) versus hardware `0x0100`.
+  These ten differences across 2326 packets remain in the corpus. The runner
+  selects the same policy in the application and acceptance check; strict mode
+  uses unchanged upstream bytes. Hardware mode independently computes canonical
+  checksums only for offloaded packets before replay and checks every other byte
+  and all software outputs against upstream. Hardware-mode PASS does not mean
+  exact upstream compatibility.
 - The original and migrated software programs pass a valid IPv4/UDP corpus.
   This does not imply equal behavior for every malformed frame, a full router
   implementation, or any proven hardware performance advantage.
@@ -91,8 +104,12 @@ unexpected completion count aborts setup. Per-port callback contexts remain aliv
 through port stop and flow destroy. SDK-supported pipes and entry APIs are used;
 there is no emulated DOCA backend presented as hardware.
 
-Each rewrite entry has a hardware packet counter. Statistics also report actual
-software Rx/Tx, rejected frames and unsent Tx packets. Hardware counters may lag
+Each rewrite or metadata entry has a hardware packet counter. `hardware_forwarded`
+counts full offload and is zero in upstream policy. `hardware_lookups` counts
+hardware-assisted cross-port decisions and is zero in hardware policy.
+`software_hw_lookup` counts packets whose validated hardware-selected egress was
+actually used by software. Statistics also report software Rx/Tx, rejected frames
+and unsent Tx packets. Hardware counters may lag
 traffic; stop offered traffic before collecting final snapshots and correlate
 them with generator captures and physical counters. Finite PCAP validation uses
 the complete declared observation window and compares bytes and multiplicity by

@@ -11,7 +11,7 @@
 
 struct completion { unsigned submitted, completed; bool failed; };
 struct l3_flow {
-    bool initialized, internal_loopback;
+    bool initialized, internal_loopback, strict_checksum;
     const volatile sig_atomic_t *cancelled;
     uint16_t queue;
     struct doca_flow_port *ports[L3_PORTS];
@@ -98,7 +98,7 @@ static doca_error_t start_port(struct l3_flow *flow, unsigned p,
     TRY(doca_flow_port_cfg_set_dev(cfg, device));
     TRY(doca_flow_port_cfg_set_actions_mem_size(cfg, action_bytes));
     TRY(doca_flow_port_cfg_set_nr_resources(cfg, DOCA_FLOW_RESOURCE_COUNTER, 1));
-    TRY(doca_flow_port_cfg_set_nr_resources(cfg, DOCA_FLOW_RESOURCE_RSS, 1));
+    TRY(doca_flow_port_cfg_set_nr_resources(cfg, DOCA_FLOW_RESOURCE_RSS, flow->strict_checksum ? 2 : 1));
     TRY(doca_flow_port_start(cfg, &flow->ports[p]));
 out:
     if (cfg) doca_flow_port_cfg_destroy(cfg);
@@ -179,6 +179,35 @@ static doca_error_t rewrite_pipe(struct l3_flow *flow, unsigned p,
     /* Supply the TTL operand explicitly: 0xff in a template is changeable. */
     TRY(finish_entry(flow, p, doca_flow_pipe_basic_add_entry(0, *pipe, &match, 0,
         &actions, NULL, NULL, DOCA_FLOW_ENTRY_FLAGS_NO_WAIT,
+        &flow->completion[p], &flow->rewrite[p])));
+out:
+    if (cfg) doca_flow_pipe_cfg_destroy(cfg);
+    return err;
+}
+
+static doca_error_t route_assist_pipe(struct l3_flow *flow, unsigned p)
+{
+    struct doca_flow_pipe_cfg *cfg = NULL;
+    struct doca_flow_match match = {0};
+    struct doca_flow_actions actions = {0}, *array[] = {&actions};
+    struct doca_flow_monitor monitor = {.counter_type = DOCA_FLOW_RESOURCE_TYPE_NON_SHARED};
+    struct doca_flow_fwd fwd = software_fwd(flow);
+    doca_error_t err;
+    /* The preceding LPM selected the other port. Preserve every packet byte;
+     * the CPU applies upstream's raw checksum increment, including its quirks.
+     * pkt_meta is big-endian in the DOCA API, host-order in the DPDK mbuf. */
+    actions.meta.pkt_meta = htonl(L3_ROUTE_META | (p ^ 1));
+    TRY(doca_flow_pipe_cfg_create(&cfg, flow->ports[p]));
+    TRY(doca_flow_pipe_cfg_set_name(cfg, "HARDWARE_ROUTE_SOFTWARE_REWRITE"));
+    TRY(doca_flow_pipe_cfg_set_type(cfg, DOCA_FLOW_PIPE_BASIC));
+    TRY(doca_flow_pipe_cfg_set_is_root(cfg, false));
+    TRY(doca_flow_pipe_cfg_set_nr_entries(cfg, 1));
+    TRY(doca_flow_pipe_cfg_set_match(cfg, &match, NULL));
+    TRY(doca_flow_pipe_cfg_set_actions(cfg, array, NULL, NULL, 1));
+    TRY(doca_flow_pipe_cfg_set_monitor(cfg, &monitor));
+    TRY(doca_flow_pipe_create(cfg, &fwd, NULL, &flow->rewrites[p]));
+    TRY(finish_entry(flow, p, doca_flow_pipe_basic_add_entry(0, flow->rewrites[p], &match,
+        0, &actions, NULL, NULL, DOCA_FLOW_ENTRY_FLAGS_NO_WAIT,
         &flow->completion[p], &flow->rewrite[p])));
 out:
     if (cfg) doca_flow_pipe_cfg_destroy(cfg);
@@ -303,13 +332,14 @@ out:
 
 int l3_flow_start(struct l3_flow **output, const struct l3_routes *routes,
                   const struct l3_macs *macs, struct doca_dev *devices[L3_PORTS],
-                  const volatile sig_atomic_t *cancelled, bool internal_loopback)
+                  const volatile sig_atomic_t *cancelled, bool internal_loopback, bool strict_checksum)
 {
     struct l3_flow *flow = calloc(1, sizeof(*flow));
     if (!flow) return -1;
     *output = flow; /* Caller owns cleanup on both success and partial failure. */
     flow->cancelled = cancelled;
     flow->internal_loopback = internal_loopback;
+    flow->strict_checksum = strict_checksum;
     doca_error_t err;
     TRY(initialize(flow));
     for (unsigned p = 0; p < L3_PORTS; ++p) TRY(start_port(flow, p, devices[p], routes->count));
@@ -317,7 +347,8 @@ int l3_flow_start(struct l3_flow **output, const struct l3_routes *routes,
     TRY(doca_flow_port_pair(flow->ports[0], flow->ports[1]));
     for (unsigned p = 0; p < L3_PORTS; ++p) {
         TRY(exception_pipe(flow, p));
-        TRY(rewrite_pipe(flow, p, macs, &flow->rewrites[p]));
+        if (strict_checksum) TRY(route_assist_pipe(flow, p));
+        else TRY(rewrite_pipe(flow, p, macs, &flow->rewrites[p]));
         TRY(route_pipe(flow, p, routes, flow->rewrites[p], &flow->lpm[p]));
         TRY(root_pipe(flow, p, flow->lpm[p], &flow->roots[p]));
         if (internal_loopback) TRY(capture_pipe(flow, p, macs));
@@ -328,7 +359,7 @@ out:
     return -1;
 }
 
-int l3_flow_counters(struct l3_flow *flow, uint64_t forwarded[L3_PORTS])
+int l3_flow_counters(struct l3_flow *flow, uint64_t forwarded[L3_PORTS], uint64_t lookups[L3_PORTS])
 {
     for (unsigned p = 0; p < L3_PORTS; ++p) {
         struct doca_flow_resource_query query = {0};
@@ -336,7 +367,8 @@ int l3_flow_counters(struct l3_flow *flow, uint64_t forwarded[L3_PORTS])
         if (err != DOCA_SUCCESS) {
             fprintf(stderr, "DOCA counter query failed: %s\n", doca_error_get_descr(err)); return -1;
         }
-        forwarded[p] = query.counter.total_pkts;
+        forwarded[p] = flow->strict_checksum ? 0 : query.counter.total_pkts;
+        lookups[p] = flow->strict_checksum ? query.counter.total_pkts : 0;
     }
     return 0;
 }

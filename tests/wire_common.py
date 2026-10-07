@@ -126,6 +126,23 @@ def stop_process(process, timeout=10):
             raise RuntimeError('DUT failed to stop after SIGINT; forced termination')
 
 
+def expected_stats(reference, checksum_policy):
+    """Account separately for hardware forwarding and hardware-assisted lookup."""
+    if checksum_policy not in ('upstream', 'hardware'): raise ValueError('Unknown checksum policy')
+    stats = {key: value.copy() if isinstance(value, list) else value
+             for key, value in reference.stats.items()}
+    stats.update(hardware_lookups=[0, 0], software_hw_lookup=[0, 0])
+    if checksum_policy == 'upstream':
+        lookups = stats['hardware_forwarded']
+        stats['hardware_forwarded'] = [0, 0]
+        stats['hardware_lookups'] = lookups.copy()
+        stats['software_hw_lookup'] = lookups.copy()
+        for p in (0, 1):
+            stats['software_rx'][p] += lookups[p]
+            stats['software_tx'][p ^ 1] += lookups[p]
+    return stats
+
+
 def check_run(reference, actual, events, exit_code, log, capture_drops, checksum_policy='upstream'):
     if checksum_policy not in ('upstream', 'hardware'): raise ValueError('Unknown checksum policy')
     if exit_code or '[ERR]' in log or capture_drops != [0, 0]:
@@ -134,11 +151,13 @@ def check_run(reference, actual, events, exit_code, log, capture_drops, checksum
         raise ValueError('Require exactly one ready event followed by one stats event')
     if events[0].get('backend') != 'doca' or events[0].get('routes') != reference.route_count:
         raise ValueError('DUT backend/route count does not match the reference')
-    for key, expected in reference.stats.items():
+    if events[0].get('checksum_policy') != checksum_policy:
+        raise ValueError('DUT checksum policy does not match the requested policy')
+    for key, expected in expected_stats(reference, checksum_policy).items():
         observed = events[1].get(key)
         values = observed if isinstance(observed, list) else [observed]
         if observed != expected or any(type(v) is not int or v < 0 for v in values):
             raise ValueError(f'Counter mismatch for {key}: expected {expected}, observed {observed}')
     if not any(reference.stats['hardware_forwarded']):
-        raise ValueError('Empty hardware workload cannot establish offload')
+        raise ValueError('Empty hardware workload cannot establish hardware processing')
     compare_frames(reference.expected if checksum_policy == 'upstream' else reference.hardware_expected, actual)
