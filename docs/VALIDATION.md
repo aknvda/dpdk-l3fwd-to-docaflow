@@ -10,7 +10,23 @@ performance and broader protocol/exception coverage remain separate experiments.
 See [RESULTS.md](RESULTS.md) for measured results and the
 [internal PHY runner](INTERNAL_LOOPBACK.md) for the passing end-to-end procedure.
 
-## Minimum physical lab
+## Completion of the IPv4 milestone
+
+| Acceptance item | Disposition |
+| --- | --- |
+| Pinned upstream and migrated software packet comparison | Complete: 1024 routes, 2326 packets |
+| Real-NIC exact upstream packet comparison | Complete: two consecutive internal PHY runs |
+| Explicit full-offload policy | Complete under its documented checksum contract |
+| Normal application startup without the loopback hook | Complete: both policies, 1024 routes; no traffic in this check |
+| Rule completions, restart, counters and restoration | Complete for the documented tests; raw evidence retained privately |
+| Reproducible migration instructions | [Focused guide](MIGRATION_GUIDE.md), source mapping and executable commands |
+
+External links are not a remaining dependency for these completed acceptance
+items. Broader packet, lifecycle, link and performance matrices below describe
+additional claims that require their own tests; they are not evidence already
+collected. In particular, exact mode performs CPU rewriting for every packet.
+
+## External-wire lab and cable-free alternative
 
 ```text
 Traffic generator port A <----> DUT port 0
@@ -32,7 +48,7 @@ valid alternatives to new direct cables. See the
 | DUT | A dedicated Linux server with two available Ethernet ports on a supported NVIDIA device. Confirm LPM, rewrite, TTL/checksum and forwarding combinations with the exact SDK/device/mode before committing to a card. BlueField-3 or ConnectX-7 are candidate platforms to evaluate, not a blanket capability guarantee. |
 | CPU/RAM | Suggested lab allocation: at least 8 available cores and 32 GB RAM, with reserved CPU cores and NUMA-local memory. These are project sizing suggestions, not vendor minimums. No GPU is required. |
 | Software | One supported OS/kernel + DOCA-Host/SDK + NIC firmware combination. Ubuntu 24.04 is a candidate. Pin package versions after inventory. Build the DOCA application against its supported DPDK, not an arbitrary upstream ABI. |
-| Traffic source | For the implemented low-rate functional runner, a separate two-port adapter in the same Linux host. For performance, a separate Linux generator with two ports at the same link speed, or a hardware tester. It must generate and measure the aggregate bidirectional target rate. Cables/optics, MTU and FEC must match. A single generator host can terminate both directions. |
+| Traffic source | The validated internal PHY fixture uses only the DUT adapter. The external-wire runner uses a separate two-port adapter in the same Linux host. For performance, a separate Linux generator with two ports at the same link speed, or a hardware tester. It must generate and measure the aggregate bidirectional target rate. Cables/optics, MTU and FEC must match. A single generator host can terminate both directions. |
 | Access | SSH, source/build access and dedicated interfaces; administrative access for driver installation, hugepages, device permissions and mode configuration. Firmware or mode changes are separate lab operations, not performed by the inventory script. |
 | Measurements | Per-port packet/byte/error counters; generator sequence/loss tracking; hardware flow counters and completion status; CPU and memory accounting; saved configs, commands and software/firmware versions. Hardware timestamping or a calibrated tester is preferred for latency. |
 
@@ -46,7 +62,7 @@ page size, count and NUMA node; size to the workload instead of copying a fixed
 allocation. Use the supported mlx5 driver stack. Do not blindly unbind mlx5
 devices to vfio-pci: the mlx5 PMD uses a bifurcated kernel/userspace model.
 
-## Gate 0: software baseline (implemented harness)
+## Gate 0: software baseline (passed)
 
 Build the pinned, unmodified upstream l3fwd. The PCAP test sends 48 valid frames
 across two virtual ingress ports, with /8, /16, /24 and /32 overlap plus misses.
@@ -132,7 +148,7 @@ window, and compare complete frames and per-port multiplicity. Retain the raw
 capture and configuration privately. Do not remove failing checksum cases to
 make hardware parity pass; record a compatibility decision explicitly.
 
-## Gate 2: functional equivalence (to expand/run on both implementations)
+## Gate 2: functional equivalence (documented corpus passed; expansion matrix)
 
 | Cases | Required evidence |
 | --- | --- |
@@ -145,7 +161,8 @@ make hardware parity pass; record a compatibility decision explicitly.
 
 The initial upstream application loads routes at startup; dynamic rule operations
 are a later DOCA control-plane test, not an existing upstream API parity claim.
-Full equivalence requires these expanded tests; passing Gate 0 is not sufficient.
+The documented IPv4 corpus has passed software and hardware comparison. A broader
+equivalence claim requires the expanded tests above; no such claim is made here.
 
 ## Gate 3: performance (after Gates 1 and 2)
 

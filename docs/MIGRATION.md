@@ -1,6 +1,6 @@
 # IPv4 migration behavior
 
-This milestone reimplements the forwarding path of pinned DPDK `examples/l3fwd`
+The validated IPv4 milestone reimplements the forwarding path of pinned DPDK `examples/l3fwd`
 with DOCA Flow 3.3. Upstream stays unchanged. It is not a translation of every
 DPDK API or every `l3fwd` option.
 
@@ -52,6 +52,9 @@ No physical probing or live-interface PCAP mode is allowed. Both backends use on
 worker and one Rx/Tx queue per port. There is no ARP/ND, ICMP generation, neighbor
 discovery, IPv6 forwarding, VLAN routing, dynamic route API or jumbo-frame support.
 Next-hop MAC addresses must be supplied explicitly for a physical test.
+
+For the implementation sequence and executable validation procedure, see the
+[focused migration guide](MIGRATION_GUIDE.md).
 
 ## Semantics and boundaries
 

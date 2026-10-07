@@ -1,5 +1,12 @@
 # Bootstrap implementation plan
 
+> Historical planning record. The two-port IPv4 functional migration is now
+> implemented and validated. Use the [focused migration guide](../../MIGRATION_GUIDE.md)
+> and [verified results](../../RESULTS.md) for current behavior, commands and coverage.
+> The default now combines hardware lookup with exact software rewriting; full
+> forwarding offload is an explicit policy. Original planning text below is
+> retained as history, not an active list of remaining work.
+
 Goal: establish an executable upstream baseline and an actionable lab contract.
 Architecture: unmodified upstream submodule plus independent test/configuration
 files; DOCA application follows once the target SDK and device are selected.

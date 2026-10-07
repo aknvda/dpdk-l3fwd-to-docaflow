@@ -1,5 +1,12 @@
 # IPv4 migration implementation
 
+> Historical planning record. The two-port IPv4 functional migration is now
+> implemented and validated. Use the [focused migration guide](../../MIGRATION_GUIDE.md)
+> and [verified results](../../RESULTS.md) for current behavior, commands and coverage.
+> The default now combines hardware lookup with exact software rewriting; full
+> forwarding offload is an explicit policy. Original planning text below is
+> retained as history, not an active list of remaining work.
+
 Implement the already selected two-port IPv4 LPM milestone against DOCA 3.3.
 The application remains C and retains DPDK packet I/O for software forwarding.
 Preserve the pinned upstream source and its existing baseline test.
