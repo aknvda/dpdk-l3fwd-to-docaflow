@@ -38,7 +38,7 @@ def capture_replay(sockets, inputs, pps, settle, alive, actual=None):
                     frame, _, flags, address = sock.recvmsg(65536)
                 except BlockingIOError:
                     break
-                if len(address) > 2 and address[2] == 4:  # PACKET_OUTGOING
+                if isinstance(address, tuple) and len(address) > 2 and address[2] == 4:  # PACKET_OUTGOING
                     continue
                 if flags & socket.MSG_TRUNC:
                     raise RuntimeError('Truncated packet capture')
