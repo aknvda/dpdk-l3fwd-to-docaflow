@@ -18,7 +18,9 @@ link interoperability remain unmeasured. See
 [lab requirements](docs/VALIDATION.md) for exact coverage and reproducible commands.
 
 Start with the [focused migration guide](docs/MIGRATION_GUIDE.md) for the code mapping,
-policy choice, build commands and end-to-end validation procedure.
+policy choice, build commands and end-to-end validation procedure. A
+[PDF edition](output/pdf/dpdk-l3fwd-to-docaflow-migration-guide.pdf), dated
+October 08, 2026, is also available.
 
 ## Layout
 
