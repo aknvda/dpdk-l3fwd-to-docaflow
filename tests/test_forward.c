@@ -90,17 +90,29 @@ int main(void)
     assert(l3_route_metadata_decode(0) == -1);
     assert(l3_route_metadata_decode(L3_ROUTE_META | 2) == -1);
     const unsigned ttls[] = {0, 1, 2, 64, 255};
+    const unsigned output_ttls[] = {255, 0, 1, 63, 254};
     const unsigned checksums[] = {0, 0xfeff, 0xff00, 0xffff};
+    /* Fixed wire bytes for the sample's native-endian increment, independent
+     * of both forwarding entry points and of checksum recomputation. */
+    const unsigned little_checksums[] = {0x0100, 0xffff, 0x0001, 0x0000};
+    const unsigned big_checksums[] = {0x0001, 0xff00, 0xff01, 0x0000};
+    const uint16_t endian_probe = 1;
+    const unsigned *output_checksums = *(const uint8_t *)&endian_probe ? little_checksums : big_checksums;
     for (unsigned p = 0; p < L3_PORTS; ++p) {
         for (unsigned t = 0; t < sizeof(ttls)/sizeof(ttls[0]); ++t) {
             for (unsigned c = 0; c < sizeof(checksums)/sizeof(checksums[0]); ++c) {
                 memcpy(frame, original, sizeof(frame)); frame[22] = (uint8_t)ttls[t];
                 frame[24] = checksums[c] >> 8; frame[25] = checksums[c];
                 uint8_t expected[60]; memcpy(expected, frame, sizeof(frame));
+                memcpy(expected, macs.dst[p], 6); memcpy(expected+6, macs.src[p], 6);
+                expected[22] = output_ttls[t];
+                expected[24] = output_checksums[c] >> 8; expected[25] = output_checksums[c];
+                uint8_t routed[60]; memcpy(routed, frame, sizeof(frame));
                 struct l3_routes selected = {.count = 1, .entries = {{0x0a000000, 8, p}}};
-                assert(l3_forward(expected, sizeof(expected), 0, &selected, &macs, &egress) == L3_FORWARDED);
+                assert(l3_forward(routed, sizeof(routed), 0, &selected, &macs, &egress) == L3_FORWARDED);
                 assert(l3_forward_selected(frame, sizeof(frame), p, &macs) == L3_FORWARDED);
                 assert(memcmp(frame, expected, sizeof(frame)) == 0);
+                assert(egress == p && memcmp(routed, expected, sizeof(routed)) == 0);
             }
         }
     }
